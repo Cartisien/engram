@@ -2,6 +2,8 @@
 
 > **Persistent semantic memory for AI agents.**
 
+![Engram demo](assets/demo.gif)
+
 ```typescript
 import { Engram } from '@cartisien/engram';
 
