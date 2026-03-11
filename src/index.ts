@@ -45,6 +45,20 @@ export interface RecallOptions {
   role?: 'user' | 'assistant' | 'system';
   includeGraph?: boolean;
   tiers?: MemoryTier[];  // v0.4: which tiers to search (default: ['working', 'long_term'])
+  userId?: string;       // v0.5: also blend in user-scoped memories
+}
+
+// v0.5: User-scoped memory — persists across sessions
+export interface UserMemoryEntry {
+  id: string;
+  userId: string;
+  content: string;
+  role: 'user' | 'assistant' | 'system';
+  timestamp: Date;
+  tier: MemoryTier;
+  consolidatedFrom?: string[];
+  metadata?: Record<string, unknown>;
+  similarity?: number;
 }
 
 export interface ConsolidateOptions {
@@ -205,6 +219,26 @@ export class Engram {
     await this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_session_tier
       ON memories(session_id, tier);
+    `);
+
+    // v0.5: User-scoped memories (cross-session)
+    await this.db.exec(`
+      CREATE TABLE IF NOT EXISTS user_memories (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        role TEXT CHECK(role IN ('user', 'assistant', 'system')),
+        timestamp INTEGER NOT NULL,
+        metadata TEXT,
+        content_hash TEXT NOT NULL,
+        embedding TEXT,
+        tier TEXT NOT NULL DEFAULT 'working',
+        consolidated_from TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_timestamp
+        ON user_memories(user_id, timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_user_tier
+        ON user_memories(user_id, tier);
     `);
 
     this.initialized = true;
@@ -575,9 +609,10 @@ JSON array of summary strings:`;
         const results = scored.map(({ row, similarity }) => mapRow(row, similarity));
 
         if (this.graphMemory && options.includeGraph !== false) {
-          return this.augmentWithGraph(sessionId, results, limit);
+          const graphAugmented = await this.augmentWithGraph(sessionId, results, limit);
+          return this.blendUserMemories(graphAugmented, options.userId, query, limit);
         }
-        return results;
+        return this.blendUserMemories(results, options.userId, query, limit);
       }
     }
 
@@ -594,7 +629,45 @@ JSON array of summary strings:`;
     params.push(limit);
 
     const rows = await this.db.all(sql, params);
-    return rows.map((row: any) => mapRow(row));
+    const results = rows.map((row: any) => mapRow(row));
+    return this.blendUserMemories(results, options.userId, query, limit);
+  }
+
+  /**
+   * Blend user-scoped memories into session recall results.
+   * User memories are appended after session results (deduplicated by content).
+   */
+  private async blendUserMemories(
+    sessionResults: MemoryEntry[],
+    userId: string | undefined,
+    query: string | undefined,
+    limit: number
+  ): Promise<MemoryEntry[]> {
+    if (!userId) return sessionResults;
+
+    const userEntries = await this.recallUser(userId, query, Math.ceil(limit / 2));
+    const seenContent = new Set(sessionResults.map(r => r.content));
+
+    const blended: MemoryEntry[] = [...sessionResults];
+    for (const u of userEntries) {
+      if (!seenContent.has(u.content)) {
+        // Adapt UserMemoryEntry to MemoryEntry shape for unified return
+        const adapted: MemoryEntry = {
+          id: u.id,
+          sessionId: `user:${u.userId}`,
+          content: u.content,
+          role: u.role,
+          timestamp: u.timestamp,
+          tier: u.tier,
+          metadata: { ...(u.metadata ?? {}), _userMemory: true, userId: u.userId },
+        };
+        if (u.consolidatedFrom) adapted.consolidatedFrom = u.consolidatedFrom;
+        if (u.similarity !== undefined) adapted.similarity = u.similarity;
+        blended.push(adapted);
+      }
+    }
+
+    return blended.slice(0, limit);
   }
 
   private async augmentWithGraph(
@@ -812,6 +885,289 @@ JSON array of summary strings:`;
     return result;
   }
 
+  // ── v0.5: User-scoped memory (cross-session) ──────────────────────────────
+
+  private mapUserRow(row: any, similarity?: number): UserMemoryEntry {
+    const entry: UserMemoryEntry = {
+      id: row.id,
+      userId: row.user_id,
+      content: row.content,
+      role: row.role,
+      timestamp: new Date(row.timestamp),
+      tier: row.tier as MemoryTier,
+    };
+    if (row.consolidated_from) entry.consolidatedFrom = JSON.parse(row.consolidated_from);
+    if (row.metadata) entry.metadata = JSON.parse(row.metadata);
+    if (similarity !== undefined) entry.similarity = similarity;
+    return entry;
+  }
+
+  /**
+   * v0.5: Store a user-scoped memory that persists across all sessions.
+   *
+   * Use this for facts about the user that should always be available
+   * regardless of which session is active — preferences, identity, long-term goals.
+   *
+   * @example
+   * ```typescript
+   * await memory.rememberUser('user_jeff', 'Prefers TypeScript over JavaScript', 'preference');
+   * await memory.rememberUser('user_jeff', 'Building GovScout — a federal contracting app');
+   *
+   * // Available in any session
+   * const facts = await memory.recallUser('user_jeff', 'what does the user prefer?', 5);
+   * ```
+   */
+  async rememberUser(
+    userId: string,
+    content: string,
+    role: 'user' | 'assistant' | 'system' = 'user',
+    metadata?: Record<string, unknown>
+  ): Promise<UserMemoryEntry> {
+    await this.init();
+
+    const id = createHash('sha256')
+      .update(`${userId}:${content}:${Date.now()}`)
+      .digest('hex').slice(0, 16);
+
+    const contentHash = createHash('sha256').update(content).digest('hex').slice(0, 16);
+    const truncated = content.slice(0, this.maxContextLength);
+
+    let embeddingJson: string | null = null;
+    if (this.semanticSearch) {
+      const vector = await this.embed(truncated);
+      if (vector) embeddingJson = JSON.stringify(vector);
+    }
+
+    await this.db.run(
+      `INSERT INTO user_memories
+       (id, user_id, content, role, timestamp, metadata, content_hash, embedding, tier)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working')`,
+      [id, userId, truncated, role, Date.now(),
+       metadata ? JSON.stringify(metadata) : null, contentHash, embeddingJson]
+    );
+
+    const entry: UserMemoryEntry = {
+      id, userId, content: truncated, role,
+      timestamp: new Date(), tier: 'working',
+      ...(metadata !== undefined && { metadata })
+    };
+    return entry;
+  }
+
+  /**
+   * v0.5: Recall user-scoped memories. Works independently of session.
+   * Semantic search when available, keyword fallback otherwise.
+   */
+  async recallUser(
+    userId: string,
+    query?: string,
+    limit: number = 10,
+    options: { tiers?: MemoryTier[]; role?: string } = {}
+  ): Promise<UserMemoryEntry[]> {
+    await this.init();
+
+    const tiers = options.tiers ?? ['working', 'long_term'];
+    const tierPlaceholders = tiers.map(() => '?').join(',');
+
+    let sql = `SELECT * FROM user_memories WHERE user_id = ? AND tier IN (${tierPlaceholders})`;
+    const params: (string | number)[] = [userId, ...tiers];
+
+    if (options.role) { sql += ' AND role = ?'; params.push(options.role); }
+
+    // Semantic search
+    if (query && query.trim() && this.semanticSearch) {
+      const queryVector = await this.embed(query);
+      if (queryVector) {
+        const rows = await this.db.all(sql + ' ORDER BY timestamp DESC', params);
+        const scored = rows
+          .map((row: any) => {
+            let similarity = 0;
+            if (row.embedding) {
+              try { similarity = this.cosineSimilarity(queryVector, JSON.parse(row.embedding)); }
+              catch { /* skip */ }
+            }
+            return { row, similarity };
+          })
+          .sort((a, b) => b.similarity - a.similarity)
+          .slice(0, limit);
+        return scored.map(({ row, similarity }) => this.mapUserRow(row, similarity));
+      }
+    }
+
+    // Keyword fallback
+    if (query && query.trim()) {
+      const keywords = query.toLowerCase().split(/\s+/).filter(k => k.length > 2);
+      if (keywords.length > 0) {
+        sql += ' AND (' + keywords.map(() => 'LOWER(content) LIKE ?').join(' OR ') + ')';
+        params.push(...keywords.map(k => `%${k}%`));
+      }
+    }
+
+    sql += ' ORDER BY timestamp DESC LIMIT ?';
+    params.push(limit);
+
+    const rows = await this.db.all(sql, params);
+    return rows.map((row: any) => this.mapUserRow(row));
+  }
+
+  /**
+   * v0.5: Delete user-scoped memories.
+   */
+  async forgetUser(
+    userId: string,
+    options?: { id?: string; before?: Date; includeLongTerm?: boolean }
+  ): Promise<number> {
+    await this.init();
+
+    const tiers = options?.includeLongTerm
+      ? `('working', 'long_term', 'archived')`
+      : `('working', 'long_term')`;
+
+    if (options?.id) {
+      const result = await this.db.run(
+        'DELETE FROM user_memories WHERE user_id = ? AND id = ?',
+        [userId, options.id]
+      );
+      return result.changes || 0;
+    }
+
+    let sql = `DELETE FROM user_memories WHERE user_id = ? AND tier IN ${tiers}`;
+    const params: (string | number)[] = [userId];
+
+    if (options?.before) {
+      sql += ' AND timestamp < ?';
+      params.push(options.before.getTime());
+    }
+
+    const result = await this.db.run(sql, params);
+    return result.changes || 0;
+  }
+
+  /**
+   * v0.5: Consolidate user-scoped memories. Same mechanic as session consolidation.
+   */
+  async consolidateUser(
+    userId: string,
+    options: ConsolidateOptions = {}
+  ): Promise<ConsolidationResult> {
+    await this.init();
+
+    const batch = options.batch ?? this.consolidateBatch;
+    const keep = options.keep ?? this.consolidateKeep;
+    const model = options.model ?? this.consolidateModel;
+
+    const rows = await this.db.all(
+      `SELECT * FROM user_memories WHERE user_id = ? AND tier = 'working'
+       ORDER BY timestamp ASC LIMIT ?`,
+      [userId, batch + keep]
+    );
+
+    const candidates = rows.slice(0, Math.max(0, rows.length - keep));
+    if (candidates.length === 0) return { summarized: 0, created: 0, archived: 0 };
+
+    const entries: MemoryEntry[] = candidates.map((row: any) => ({
+      id: row.id,
+      sessionId: row.user_id,
+      content: row.content,
+      role: row.role,
+      timestamp: new Date(row.timestamp),
+      tier: row.tier as MemoryTier,
+    }));
+
+    const summaries = await this.summarizeMemories(entries, model);
+    if (summaries.length === 0) return { summarized: entries.length, created: 0, archived: 0 };
+
+    if (options.dryRun) {
+      return { summarized: entries.length, created: 0, archived: 0, previews: summaries };
+    }
+
+    const sourceIds = entries.map(e => e.id);
+    const consolidatedFromJson = JSON.stringify(sourceIds);
+
+    for (const summary of summaries) {
+      const id = createHash('sha256')
+        .update(`${userId}:lt:${summary}:${Date.now()}`)
+        .digest('hex').slice(0, 16);
+      const contentHash = createHash('sha256').update(summary).digest('hex').slice(0, 16);
+
+      let embeddingJson: string | null = null;
+      if (this.semanticSearch) {
+        const vector = await this.embed(summary);
+        if (vector) embeddingJson = JSON.stringify(vector);
+      }
+
+      await this.db.run(
+        `INSERT INTO user_memories
+         (id, user_id, content, role, timestamp, metadata, content_hash, embedding, tier, consolidated_from)
+         VALUES (?, ?, ?, 'system', ?, NULL, ?, ?, 'long_term', ?)`,
+        [id, userId, summary.slice(0, this.maxContextLength), Date.now(),
+         contentHash, embeddingJson, consolidatedFromJson]
+      );
+    }
+
+    const placeholders = sourceIds.map(() => '?').join(',');
+    await this.db.run(
+      `UPDATE user_memories SET tier = 'archived' WHERE id IN (${placeholders})`,
+      sourceIds
+    );
+
+    return { summarized: entries.length, created: summaries.length, archived: entries.length };
+  }
+
+  /**
+   * v0.5: Stats for user-scoped memories.
+   */
+  async userStats(userId: string): Promise<{
+    total: number;
+    byRole: Record<string, number>;
+    byTier: Record<MemoryTier, number>;
+    oldest: Date | null;
+    newest: Date | null;
+    withEmbeddings: number;
+  }> {
+    await this.init();
+
+    const totalRow = await this.db.get(
+      `SELECT COUNT(*) as count FROM user_memories WHERE user_id = ? AND tier != 'archived'`,
+      [userId]
+    );
+    const roleRows = await this.db.all(
+      `SELECT role, COUNT(*) as count FROM user_memories
+       WHERE user_id = ? AND tier != 'archived' GROUP BY role`,
+      [userId]
+    );
+    const tierRows = await this.db.all(
+      `SELECT tier, COUNT(*) as count FROM user_memories WHERE user_id = ? GROUP BY tier`,
+      [userId]
+    );
+
+    const byRole: Record<string, number> = {};
+    roleRows.forEach((row: any) => { byRole[row.role] = row.count; });
+
+    const byTier: Record<MemoryTier, number> = { working: 0, long_term: 0, archived: 0 };
+    tierRows.forEach((row: any) => { byTier[row.tier as MemoryTier] = row.count; });
+
+    const range = await this.db.get(
+      `SELECT MIN(timestamp) as oldest, MAX(timestamp) as newest
+       FROM user_memories WHERE user_id = ? AND tier != 'archived'`,
+      [userId]
+    );
+    const embRow = await this.db.get(
+      `SELECT COUNT(*) as count FROM user_memories
+       WHERE user_id = ? AND tier != 'archived' AND embedding IS NOT NULL`,
+      [userId]
+    );
+
+    return {
+      total: totalRow?.count || 0,
+      byRole,
+      byTier,
+      oldest: range?.oldest ? new Date(range.oldest) : null,
+      newest: range?.newest ? new Date(range.newest) : null,
+      withEmbeddings: embRow?.count || 0,
+    };
+  }
+
   async close(): Promise<void> {
     if (this.db) {
       await this.db.close();
@@ -821,3 +1177,6 @@ JSON array of summary strings:`;
 }
 
 export default Engram;
+
+// v0.6: Cogito lifecycle integration helpers
+export { buildWakeBriefing, handleSleep } from './integrations/cogito.js';
