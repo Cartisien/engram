@@ -2,6 +2,8 @@
 
 > **Persistent semantic memory for AI agents.**
 
+![Engram demo](assets/demo.gif)
+
 ```typescript
 import { Engram } from '@cartisien/engram';
 
@@ -127,11 +129,43 @@ await memory.forget('session_abc', { id: 'entry_id' });     // one
 await memory.forget('session_abc', { before: new Date() }); // old entries
 ```
 
+### `graph(sessionId, entity)`
+
+Returns a one-hop relationship map for a named entity — all connected entities and the memories that link them.
+
+Requires `graphMemory: true` in config and a running Ollama instance with `qwen2.5:32b` (or override via `graphModel`).
+
+```typescript
+const memory = new Engram({
+  dbPath: './memory.db',
+  graphMemory: true,
+  graphModel: 'qwen2.5:32b', // default
+});
+
+const graph = await memory.graph('session_abc', 'GovScout');
+// {
+//   entity: 'GovScout',
+//   edges: [
+//     { relation: 'uses', target: 'MUI', sourceMemoryId: '...' },
+//     { relation: 'built_by', target: 'Jeff', sourceMemoryId: '...' },
+//   ],
+//   memories: [ { content: '...', ... } ]
+// }
+```
+
+### `recall()` with graph augmentation
+
+```typescript
+const results = await memory.recall('session_abc', 'what is GovScout?', 5, {
+  includeGraph: true, // augment top results with graph-connected memories
+});
+```
+
 ### `stats(sessionId)`
 
 ```typescript
 const stats = await memory.stats('session_abc');
-// { total: 42, byRole: { user: 21, assistant: 21 }, withEmbeddings: 42, ... }
+// { total: 42, byRole: { user: 21, assistant: 21 }, withEmbeddings: 42, graphNodes: 18, graphEdges: 31 }
 ```
 
 ## MCP Server
@@ -167,7 +201,7 @@ Engram doesn't just persist data — it gives your agents **continuity**. The ab
 
 - **v0.1** ✅ SQLite persistence, keyword search
 - **v0.2** ✅ Semantic search via local Ollama embeddings
-- **v0.3** 🚧 Graph memory — entity relationships, connected context
+- **v0.3** ✅ Graph memory — entity relationships, connected context
 - **v0.4** 📋 Memory consolidation, long-term summarization
 
 ## The Cartisien Memory Suite
