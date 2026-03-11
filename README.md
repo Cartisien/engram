@@ -1,103 +1,190 @@
-# @cartisien/engram
+# Engram
 
-> Persistent semantic memory for AI agents.
+> **Persistent semantic memory for AI agents.**
 
-*Memory is not a static record. It is a trace — context-dependent, deferred, and always open to reinterpretation. Every recall is a rewriting.*
-— Inspired by Derrida, *Of Grammatology*
+```typescript
+import { Engram } from '@cartisien/engram';
+
+const memory = new Engram({ dbPath: './memory.db' });
+
+// Store
+await memory.remember('user_123', 'User prefers TypeScript and dark mode', 'user');
+
+// Recall semantically — finds the right memory even without exact keyword match
+const context = await memory.recall('user_123', 'what are the user\'s preferences?', 5);
+// [{ content: 'User prefers TypeScript and dark mode', similarity: 0.82, ... }]
+```
 
 ---
 
-## Install
+## The Problem
+
+AI assistants are amnesiacs. Every conversation starts fresh. Context windows fill up. Important details get lost.
+
+Stuffing everything into the system prompt wastes tokens and still misses things. You need a retrieval layer — not a dump.
+
+## The Solution
+
+Engram gives your agents **persistent, semantically searchable memory** — SQLite-backed, TypeScript-first, zero config.
+
+- **Semantic search:** Finds relevant memories by meaning, not just keywords (via local Ollama embeddings)
+- **Zero config:** Works out of the box, falls back to keyword search without Ollama
+- **Local-first:** Your data stays on your machine. No API keys, no cloud required
+- **MCP-native:** Drop into Claude Desktop or Cursor via [`@cartisien/engram-mcp`](https://github.com/Cartisien/engram-mcp)
+- **Typed:** Full TypeScript support
+
+## Installation
 
 ```bash
 npm install @cartisien/engram
 ```
 
-## Quick Start
+### Optional: Local Embeddings (Recommended)
 
-```ts
-import { Engram } from '@cartisien/engram'
+For semantic search, install [Ollama](https://ollama.ai) and pull the embedding model:
 
-const mem = new Engram({
-  adapter: 'memory',    // 'memory' | 'postgres' | 'sqlite'
-  agentId: 'my-agent',
-})
-
-await mem.wake()
-
-// Store a memory
-const m = await mem.store({
-  content: 'The user prefers dark mode and works late at night',
-  metadata: { source: 'observation', confidence: 0.9 },
-  importance: 0.7,
-})
-
-// Semantic search
-const results = await mem.search('user interface preferences', { limit: 5 })
-results.forEach(({ memory, score }) => {
-  console.log(score.toFixed(3), memory.content)
-})
-
-// Retrieve by ID
-const fetched = await mem.get(m.id)
-
-// Forget
-await mem.forget(m.id)
-
-await mem.sleep()
+```bash
+ollama pull nomic-embed-text
 ```
 
----
+Without Ollama, Engram falls back to keyword search automatically.
+
+## Quick Start
+
+```typescript
+import { Engram } from '@cartisien/engram';
+
+const memory = new Engram({
+  dbPath: './bot-memory.db',
+  embeddingUrl: 'http://localhost:11434', // Ollama default
+});
+
+// In your agent/chat handler
+async function handleMessage(sessionId: string, message: string) {
+  // 1. Recall relevant context semantically
+  const context = await memory.recall(sessionId, message, 5);
+
+  // 2. Build prompt with memory
+  const prompt = buildPrompt(context, message);
+
+  // 3. Get AI response
+  const response = await llm.chat(prompt);
+
+  // 4. Store both sides
+  await memory.remember(sessionId, message, 'user');
+  await memory.remember(sessionId, response, 'assistant');
+
+  return response;
+}
+```
 
 ## API
 
-### `new Engram(config)`
+### `new Engram(config?)`
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `adapter` | `'memory' \| 'postgres' \| 'sqlite'` | Storage backend |
-| `agentId` | `string` | Unique agent identifier |
-| `connectionString` | `string?` | Required for `postgres` and `sqlite` |
-| `embeddingDimensions` | `number?` | Vector size (default `1536`) |
-
-### Methods
-
-| Method | Description |
-|--------|-------------|
-| `wake()` | Initialize adapter, record session start |
-| `sleep()` | Persist state, close connections |
-| `store(input)` | Embed and store a memory |
-| `storeMany(inputs[])` | Batch store |
-| `search(query, options?)` | Semantic search — returns `SearchResult[]` |
-| `get(id)` | Retrieve by ID |
-| `forget(id)` | Delete permanently |
-| `list(limit?)` | List recent memories for this agent |
-
----
-
-## Adapters
-
-| Adapter | Status | Notes |
-|---------|--------|-------|
-| `memory` | ✅ Ready | In-process, no persistence. Ideal for tests. |
-| `postgres` | 🔜 Planned | pgvector, ivfflat index |
-| `sqlite` | 🔜 Planned | Local file, cosine similarity in-process |
-
----
-
-## The Philosophy
-
-Engram sits between **Cogito** (agent identity) and **Extensa** (vector infrastructure) in the Cartisien memory stack.
-
-```
-Cogito  ←→  Engram  ←→  Extensa
-identity    memory      vectors
+```typescript
+const memory = new Engram({
+  dbPath: './memory.db',           // SQLite file path (default: ':memory:')
+  maxContextLength: 4000,          // Max chars per entry (default: 4000)
+  embeddingUrl: 'http://localhost:11434',  // Ollama base URL
+  embeddingModel: 'nomic-embed-text',     // Embedding model
+  semanticSearch: true,            // Enable semantic search (default: true)
+});
 ```
 
-Where Descartes separated mind (*res cogitans*) from body (*res extensa*), Engram is the bridge — the thinking substance that persists across sessions, the trace that makes continuity possible without claiming a fixed self.
+### `remember(sessionId, content, role?, metadata?)`
 
----
+Store a memory. Embedding is generated automatically.
+
+```typescript
+await memory.remember('session_abc', 'User loves Thai food', 'user');
+```
+
+### `recall(sessionId, query?, limit?, options?)`
+
+Retrieve relevant memories. Uses semantic search when available, keyword fallback otherwise. Returns entries sorted by similarity score.
+
+```typescript
+const results = await memory.recall('session_abc', 'food preferences', 5);
+// [{ content: '...', similarity: 0.84, ... }]
+```
+
+### `history(sessionId, limit?)`
+
+Chronological conversation history.
+
+```typescript
+const chat = await memory.history('session_abc', 20);
+```
+
+### `forget(sessionId, options?)`
+
+Delete memories.
+
+```typescript
+await memory.forget('session_abc');                          // all
+await memory.forget('session_abc', { id: 'entry_id' });     // one
+await memory.forget('session_abc', { before: new Date() }); // old entries
+```
+
+### `stats(sessionId)`
+
+```typescript
+const stats = await memory.stats('session_abc');
+// { total: 42, byRole: { user: 21, assistant: 21 }, withEmbeddings: 42, ... }
+```
+
+## MCP Server
+
+Use Engram directly in Claude Desktop, Cursor, or any MCP client:
+
+```bash
+npx -y @cartisien/engram-mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "npx",
+      "args": ["-y", "@cartisien/engram-mcp"]
+    }
+  }
+}
+```
+
+→ [`@cartisien/engram-mcp`](https://github.com/Cartisien/engram-mcp) on GitHub
+
+## Philosophy
+
+> *"The trace precedes presence."*
+
+Memory isn't storage. It's the substrate of self.
+
+Engram doesn't just persist data — it gives your agents **continuity**. The ability to learn, reference, and grow across conversations.
+
+## Roadmap
+
+- **v0.1** ✅ SQLite persistence, keyword search
+- **v0.2** ✅ Semantic search via local Ollama embeddings
+- **v0.3** 🚧 Graph memory — entity relationships, connected context
+- **v0.4** 📋 Memory consolidation, long-term summarization
+
+## The Cartisien Memory Suite
+
+| Package | Purpose |
+|---------|---------|
+| [`@cartisien/engram`](https://github.com/Cartisien/engram) | Persistent memory SDK — **this package** |
+| [`@cartisien/engram-mcp`](https://github.com/Cartisien/engram-mcp) | MCP server for Claude Desktop / Cursor |
+| `@cartisien/extensa` | Vector infrastructure *(coming soon)* |
+| `@cartisien/cogito` | Agent identity & lifecycle *(coming soon)* |
+
+*Res cogitans meets res extensa.*
 
 ## License
 
-MIT © Cartisien Interactive
+MIT © [Cartisien Interactive](https://cartisien.com)
+
+---
+
+**Built for people who think forgetting is a bug.**
