@@ -30,6 +30,8 @@ Stuffing everything into the system prompt wastes tokens and still misses things
 Engram gives your agents **persistent, semantically searchable memory** — SQLite-backed, TypeScript-first, zero config.
 
 - **Semantic search:** Finds relevant memories by meaning, not just keywords (via local Ollama embeddings)
+- **Graph memory:** Extracts entity-relationship triples — recall connected context automatically
+- **Consolidation:** Summarizes old memories into long-term entries so context stays dense, not noisy
 - **Zero config:** Works out of the box, falls back to keyword search without Ollama
 - **Local-first:** Your data stays on your machine. No API keys, no cloud required
 - **MCP-native:** Drop into Claude Desktop or Cursor via [`@cartisien/engram-mcp`](https://github.com/Cartisien/engram-mcp)
@@ -161,11 +163,55 @@ const results = await memory.recall('session_abc', 'what is GovScout?', 5, {
 });
 ```
 
+### `consolidate(sessionId, options?)` *(v0.4)*
+
+Summarizes old working memories into dense long-term entries via a local LLM. Originals are archived (hidden from recall but not deleted).
+
+```typescript
+const memory = new Engram({
+  dbPath: './memory.db',
+  autoConsolidate: true,       // auto-trigger on remember() (default: false)
+  consolidateThreshold: 100,   // trigger when working memories exceed this (default: 100)
+  consolidateKeep: 20,         // keep N most recent working memories untouched (default: 20)
+  consolidateBatch: 50,        // memories to process per run (default: 50)
+  consolidateModel: 'qwen2.5:32b', // LLM for summarization
+});
+
+// Manual consolidation
+const result = await memory.consolidate('session_abc');
+// → { summarized: 50, created: 4, archived: 50 }
+
+// Preview without writing
+const preview = await memory.consolidate('session_abc', { dryRun: true });
+// → { summarized: 50, created: 0, archived: 0, previews: ['User prefers TypeScript...', ...] }
+```
+
+**Memory tiers:**
+- `working` — recent, granular memories (default)
+- `long_term` — LLM-generated summaries of consolidated batches
+- `archived` — original memories after consolidation (excluded from recall)
+
+`recall()` searches `working` and `long_term` by default. Pass `tiers` to override:
+
+```typescript
+// Search all tiers including archived
+const results = await memory.recall('session_abc', 'preferences', 10, {
+  tiers: ['working', 'long_term', 'archived'],
+});
+```
+
 ### `stats(sessionId)`
 
 ```typescript
 const stats = await memory.stats('session_abc');
-// { total: 42, byRole: { user: 21, assistant: 21 }, withEmbeddings: 42, graphNodes: 18, graphEdges: 31 }
+// {
+//   total: 42,
+//   byRole: { user: 21, assistant: 21 },
+//   byTier: { working: 30, long_term: 12, archived: 50 },
+//   withEmbeddings: 42,
+//   graphNodes: 18,
+//   graphEdges: 31
+// }
 ```
 
 ## MCP Server
@@ -202,7 +248,7 @@ Engram doesn't just persist data — it gives your agents **continuity**. The ab
 - **v0.1** ✅ SQLite persistence, keyword search
 - **v0.2** ✅ Semantic search via local Ollama embeddings
 - **v0.3** ✅ Graph memory — entity relationships, connected context
-- **v0.4** 📋 Memory consolidation, long-term summarization
+- **v0.4** ✅ Memory consolidation, long-term summarization
 
 ## The Cartisien Memory Suite
 
