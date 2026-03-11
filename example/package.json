@@ -1,0 +1,14 @@
+{
+  "name": "engram-example",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "dependencies": {
+    "@cartisien/engram": "file:.."
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0"
+  }
+}

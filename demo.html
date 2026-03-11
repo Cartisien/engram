@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Engram API - Health Check & Demo</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            line-height: 1.6;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .subtitle {
+            color: #888;
+            margin-bottom: 30px;
+        }
+        .card {
+            background: #141414;
+            border: 1px solid #2a2a2a;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .card h2 {
+            font-size: 1.2rem;
+            margin-bottom: 16px;
+            color: #fff;
+        }
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.1rem;
+        }
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #22c55e;
+            animation: pulse 2s infinite;
+        }
+        .status-dot.error { background: #ef4444; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .endpoint {
+            background: #1a1a1a;
+            border-radius: 8px;
+            padding: 16px;
+            margin: 12px 0;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.9rem;
+        }
+        .method {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+        .method.get { background: #22c55e; color: #000; }
+        .method.post { background: #3b82f6; color: #fff; }
+        .method.delete { background: #ef4444; color: #fff; }
+        .url { color: #888; }
+        .path { color: #fff; }
+        .try-it {
+            margin-top: 20px;
+            padding: 20px;
+            background: #1a1a1a;
+            border-radius: 8px;
+        }
+        .try-it h3 {
+            margin-bottom: 12px;
+            color: #fff;
+        }
+        input, textarea, button {
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0;
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 6px;
+            color: #fff;
+            font-family: inherit;
+        }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover {
+            opacity: 0.9;
+        }
+        .response {
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 16px;
+            margin-top: 12px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.85rem;
+            white-space: pre-wrap;
+            overflow-x: auto;
+        }
+        .npm-install {
+            background: #1a1a1a;
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin: 20px 0;
+            font-family: 'SF Mono', Monaco, monospace;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .npm-install code {
+            color: #22c55e;
+        }
+        .copy-btn {
+            width: auto;
+            padding: 6px 12px;
+            margin: 0;
+            font-size: 0.8rem;
+        }
+        footer {
+            text-align: center;
+            color: #666;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #2a2a2a;
+        }
+        footer a {
+            color: #888;
+            text-decoration: none;
+        }
+        footer a:hover {
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧠 Engram</h1>
+        <p class="subtitle">Persistent memory for AI assistants — v0.1.0</p>
+
+        <div class="card">
+            <h2>API Health</h2>
+            <div class="status">
+                <div class="status-dot" id="health-dot"></div>
+                <span id="health-status">Checking...</span>
+            </div>
+            <div style="margin-top: 12px; color: #888; font-size: 0.9rem;">
+                Base URL: <code>http://192.168.68.60:3455</code>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Quick Install</h2>
+            <div class="npm-install">
+                <code>npm install @cartisien/engram</code>
+                <button class="copy-btn" onclick="copyToClipboard('npm install @cartisien/engram')">Copy</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>API Endpoints</h2>
+            
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="url">/health</span>
+            </div>
+            
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/memory/:sessionId</span>
+                <div style="margin-top: 8px; color: #888;">Body: { content, role?, metadata? }</div>
+            </div>
+            
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/memory/:sessionId?query=&limit=</span>
+            </div>
+            
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/history/:sessionId?limit=</span>
+            </div>
+            
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/stats/:sessionId</span>
+            </div>
+            
+            <div class="endpoint">
+                <span class="method delete">DELETE</span>
+                <span class="path">/memory/:sessionId?id=</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Try It Live</h2>
+            <div class="try-it">
+                <h3>Store a Memory</h3>
+                <input type="text" id="sessionId" placeholder="Session ID (e.g., user_123)" value="demo_session">
+                <textarea id="content" rows="3" placeholder="Memory content...">I ride a Triumph Bonneville motorcycle</textarea>
+                <select id="role" style="width: 100%; padding: 12px; background: #0a0a0a; border: 1px solid #333; color: #fff; border-radius: 6px;">
+                    <option value="user">user</option>
+                    <option value="assistant">assistant</option>
+                    <option value="system">system</option>
+                </select>
+                <button onclick="storeMemory()">Store Memory</button>
+                <div class="response" id="store-response" style="display: none;"></div>
+            </div>
+
+            <div class="try-it" style="margin-top: 20px;">
+                <h3>Recall Memories</h3>
+                <input type="text" id="query" placeholder="Search query (optional)" value="motorcycle">
+                <input type="number" id="limit" placeholder="Limit" value="5" style="width: 100px; display: inline-block;">
+                <button onclick="recallMemories()">Recall</button>
+                <div class="response" id="recall-response" style="display: none;"></div>
+            </div>
+        </div>
+
+        <footer>
+            <p><a href="https://www.npmjs.com/package/@cartisien/engram">npm</a> • 
+               <a href="https://github.com/cartisien/engram">GitHub</a> • 
+               Built with 🖤 by <a href="https://cartisien.com">Cartisien</a></p>
+        </footer>
+    </div>
+
+    <script>
+        const API_BASE = 'http://192.168.68.60:3455';
+
+        async function checkHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                document.getElementById('health-dot').classList.remove('error');
+                document.getElementById('health-status').textContent = 
+                    `Online — ${data.service} v${data.version}`;
+            } catch (err) {
+                document.getElementById('health-dot').classList.add('error');
+                document.getElementById('health-status').textContent = 
+                    'Offline — ' + err.message;
+            }
+        }
+
+        async function storeMemory() {
+            const sessionId = document.getElementById('sessionId').value;
+            const content = document.getElementById('content').value;
+            const role = document.getElementById('role').value;
+            const responseDiv = document.getElementById('store-response');
+
+            try {
+                const response = await fetch(`${API_BASE}/memory/${sessionId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content, role })
+                });
+                const data = await response.json();
+                responseDiv.style.display = 'block';
+                responseDiv.textContent = JSON.stringify(data, null, 2);
+            } catch (err) {
+                responseDiv.style.display = 'block';
+                responseDiv.textContent = 'Error: ' + err.message;
+            }
+        }
+
+        async function recallMemories() {
+            const sessionId = document.getElementById('sessionId').value;
+            const query = document.getElementById('query').value;
+            const limit = document.getElementById('limit').value;
+            const responseDiv = document.getElementById('recall-response');
+
+            try {
+                const url = new URL(`${API_BASE}/memory/${sessionId}`);
+                if (query) url.searchParams.append('query', query);
+                url.searchParams.append('limit', limit);
+
+                const response = await fetch(url);
+                const data = await response.json();
+                responseDiv.style.display = 'block';
+                responseDiv.textContent = JSON.stringify(data, null, 2);
+            } catch (err) {
+                responseDiv.style.display = 'block';
+                responseDiv.textContent = 'Error: ' + err.message;
+            }
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text);
+        }
+
+        checkHealth();
+        setInterval(checkHealth, 30000);
+    </script>
+</body>
+</html>

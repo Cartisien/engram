@@ -1,0 +1,45 @@
+{
+  "name": "@cartisien/engram",
+  "version": "0.2.0",
+  "description": "Persistent memory for AI assistants. SQLite-backed conversational memory with semantic search.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "node --test dist/**/*.test.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai",
+    "memory",
+    "openai",
+    "assistant",
+    "sqlite",
+    "embeddings",
+    "conversational-memory"
+  ],
+  "author": "Cartisien Interactive",
+  "license": "MIT",
+  "dependencies": {
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "@types/sqlite3": "^3.1.11",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cartisien/engram.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
