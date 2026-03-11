@@ -778,7 +778,26 @@ JSON array of summary strings:`;
   }
 
   async history(sessionId: string, limit: number = 20): Promise<MemoryEntry[]> {
-    return this.recall(sessionId, undefined, limit, {});
+    await this.init();
+    // Fetch newest N, then sort ASC for chronological display
+    const rows = await this.db.all(
+      `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from
+       FROM (
+         SELECT * FROM memories
+         WHERE session_id = ? AND tier IN ('working', 'long_term')
+         ORDER BY timestamp DESC LIMIT ?
+       ) ORDER BY timestamp ASC`,
+      [sessionId, limit]
+    );
+    return rows.map((row: any) => {
+      const entry: MemoryEntry = {
+        id: row.id, sessionId: row.session_id, content: row.content,
+        role: row.role, timestamp: new Date(row.timestamp), tier: row.tier as MemoryTier,
+      };
+      if (row.consolidated_from) entry.consolidatedFrom = JSON.parse(row.consolidated_from);
+      if (row.metadata) entry.metadata = JSON.parse(row.metadata);
+      return entry;
+    });
   }
 
   async forget(
@@ -1180,3 +1199,7 @@ export default Engram;
 
 // v0.6: Cogito lifecycle integration helpers
 export { buildWakeBriefing, handleSleep } from './integrations/cogito.js';
+
+// v0.7: Remote HTTP client
+export { EngramClient } from './client.js';
+export type { EngramClientConfig } from './client.js';
