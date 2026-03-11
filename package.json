@@ -1,38 +1,43 @@
 {
   "name": "@cartisien/engram",
-  "version": "0.1.0",
-  "description": "Persistent semantic memory for AI agents. Memory as trace — not a static record, but a living, context-dependent artifact.",
-  "main": "./dist/index.js",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    }
-  },
-  "files": ["dist"],
+  "version": "0.2.0",
+  "description": "Persistent memory for AI assistants. SQLite-backed conversational memory with semantic search.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts",
-    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "node --test dist/**/*.test.js",
     "prepublishOnly": "npm run build"
   },
-  "keywords": ["memory", "ai", "agents", "semantic", "embeddings", "vector"],
+  "keywords": [
+    "ai",
+    "memory",
+    "openai",
+    "assistant",
+    "sqlite",
+    "embeddings",
+    "conversational-memory"
+  ],
   "author": "Cartisien Interactive",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/cartisien/engram"
+  "dependencies": {
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "tsup": "^8.0.0",
-    "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "@types/sqlite3": "^3.1.11",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cartisien/engram.git"
   },
   "engines": {
     "node": ">=18.0.0"
