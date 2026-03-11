@@ -1,12 +1,16 @@
 import { createHash } from 'crypto';
 import { open, Database as SQLiteDatabase } from 'sqlite';
 
+export type MemoryTier = 'working' | 'long_term' | 'archived';
+
 export interface MemoryEntry {
   id: string;
   sessionId: string;
   content: string;
   role: 'user' | 'assistant' | 'system';
   timestamp: Date;
+  tier: MemoryTier;
+  consolidatedFrom?: string[];  // v0.4: source IDs for long_term entries
   metadata?: Record<string, unknown>;
   similarity?: number;
 }
@@ -39,7 +43,22 @@ export interface RecallOptions {
   before?: Date;
   after?: Date;
   role?: 'user' | 'assistant' | 'system';
-  includeGraph?: boolean; // v0.3: also traverse graph for related context
+  includeGraph?: boolean;
+  tiers?: MemoryTier[];  // v0.4: which tiers to search (default: ['working', 'long_term'])
+}
+
+export interface ConsolidateOptions {
+  batch?: number;         // how many working memories to consolidate (default: 50)
+  keep?: number;          // keep N most recent working memories untouched (default: 20)
+  model?: string;         // LLM model to use (overrides config)
+  dryRun?: boolean;       // preview what would be consolidated without writing
+}
+
+export interface ConsolidationResult {
+  summarized: number;     // working memories processed
+  created: number;        // long_term summaries created
+  archived: number;       // originals archived
+  previews?: string[];    // only set on dryRun: the summary strings that would be stored
 }
 
 export interface EngramConfig {
@@ -48,26 +67,36 @@ export interface EngramConfig {
   embeddingUrl?: string;
   embeddingModel?: string;
   semanticSearch?: boolean;
-  graphMemory?: boolean; // v0.3: enable graph extraction
-  graphModel?: string;   // Ollama model for entity extraction (default: qwen2.5:32b)
+  graphMemory?: boolean;
+  graphModel?: string;
+  // v0.4: consolidation
+  autoConsolidate?: boolean;       // auto-trigger consolidation on remember() (default: false)
+  consolidateThreshold?: number;   // trigger when working memories exceed this (default: 100)
+  consolidateKeep?: number;        // keep N most recent working memories as-is (default: 20)
+  consolidateBatch?: number;       // process N memories per consolidation run (default: 50)
+  consolidateModel?: string;       // Ollama model for summarization (default: qwen2.5:32b)
 }
 
 /**
  * Engram - Persistent semantic memory for AI agents
  *
- * v0.3 adds graph memory — entity relationships extracted from memories
- * using a local LLM, enabling richer contextual recall.
+ * v0.4 adds memory consolidation — working memories are periodically
+ * summarized into long-term memories by a local LLM, keeping context
+ * dense and relevant as conversations grow.
  *
  * @example
  * ```typescript
  * import { Engram } from '@cartisien/engram';
  *
- * const memory = new Engram({ dbPath: './memory.db', graphMemory: true });
+ * const memory = new Engram({
+ *   dbPath: './memory.db',
+ *   autoConsolidate: true,
+ *   consolidateThreshold: 100,
+ * });
  *
- * await memory.remember('session_1', 'Jeff is building GovScout in React 19', 'user');
- * const context = await memory.recall('session_1', 'what is Jeff building?', 5);
- * const graph = await memory.graph('session_1', 'GovScout');
- * // → { entity: 'GovScout', relationships: [{ relation: 'built_with', target: 'React 19' }], ... }
+ * // Manual consolidation
+ * const result = await memory.consolidate('session_1');
+ * // → { summarized: 50, created: 4, archived: 50 }
  * ```
  */
 export class Engram {
@@ -80,6 +109,11 @@ export class Engram {
   private semanticSearch: boolean;
   private graphMemory: boolean;
   private graphModel: string;
+  private autoConsolidate: boolean;
+  private consolidateThreshold: number;
+  private consolidateKeep: number;
+  private consolidateBatch: number;
+  private consolidateModel: string;
 
   constructor(config: EngramConfig = {}) {
     this.dbPath = config.dbPath || ':memory:';
@@ -89,6 +123,11 @@ export class Engram {
     this.semanticSearch = config.semanticSearch !== false;
     this.graphMemory = config.graphMemory === true;
     this.graphModel = config.graphModel || 'qwen2.5:32b';
+    this.autoConsolidate = config.autoConsolidate === true;
+    this.consolidateThreshold = config.consolidateThreshold ?? 100;
+    this.consolidateKeep = config.consolidateKeep ?? 20;
+    this.consolidateBatch = config.consolidateBatch ?? 50;
+    this.consolidateModel = config.consolidateModel || config.graphModel || 'qwen2.5:32b';
   }
 
   private async init(): Promise<void> {
@@ -112,14 +151,21 @@ export class Engram {
         timestamp INTEGER NOT NULL,
         metadata TEXT,
         content_hash TEXT NOT NULL,
-        embedding TEXT
+        embedding TEXT,
+        tier TEXT NOT NULL DEFAULT 'working',
+        consolidated_from TEXT
       );
     `);
 
-    // Add embedding column if upgrading from v0.1
-    try {
-      await this.db.exec(`ALTER TABLE memories ADD COLUMN embedding TEXT`);
-    } catch { /* already exists */ }
+    // Migrations for existing databases
+    const migrations = [
+      `ALTER TABLE memories ADD COLUMN embedding TEXT`,
+      `ALTER TABLE memories ADD COLUMN tier TEXT NOT NULL DEFAULT 'working'`,
+      `ALTER TABLE memories ADD COLUMN consolidated_from TEXT`,
+    ];
+    for (const m of migrations) {
+      try { await this.db.exec(m); } catch { /* column exists */ }
+    }
 
     // v0.3: Graph tables
     await this.db.exec(`
@@ -156,12 +202,14 @@ export class Engram {
       ON memories(session_id, timestamp DESC);
     `);
 
+    await this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_session_tier
+      ON memories(session_id, tier);
+    `);
+
     this.initialized = true;
   }
 
-  /**
-   * Fetch embedding vector from Ollama
-   */
   private async embed(text: string): Promise<number[] | null> {
     try {
       const response = await fetch(`${this.embeddingUrl}/api/embeddings`, {
@@ -178,9 +226,6 @@ export class Engram {
     }
   }
 
-  /**
-   * Extract entity-relationship triples from text using a local LLM
-   */
   private async extractGraph(text: string): Promise<GraphEdge[]> {
     const prompt = `Extract entity-relationship triples from this text. Return ONLY a JSON array of objects with keys: "from", "relation", "to". Be concise. Max 5 triples. If nothing to extract, return [].
 
@@ -203,12 +248,9 @@ JSON array:`;
       if (!response.ok) return [];
       const data = await response.json() as { response: string };
       const raw = data.response.trim();
-
-      // Extract JSON array from response
       const match = raw.match(/\[[\s\S]*\]/);
       if (!match) return [];
       const triples = JSON.parse(match[0]) as Array<{ from: string; relation: string; to: string }>;
-
       return triples
         .filter(t => t.from && t.relation && t.to)
         .map(t => ({
@@ -222,9 +264,6 @@ JSON array:`;
     }
   }
 
-  /**
-   * Upsert a graph node
-   */
   private async upsertNode(sessionId: string, entity: string, type?: string): Promise<void> {
     const id = createHash('sha256').update(`${sessionId}:${entity}`).digest('hex').slice(0, 16);
     await this.db.run(
@@ -234,17 +273,12 @@ JSON array:`;
     );
   }
 
-  /**
-   * Store a graph edge
-   */
   private async storeEdge(sessionId: string, edge: GraphEdge, memoryId: string): Promise<void> {
     const id = createHash('sha256')
       .update(`${sessionId}:${edge.from}:${edge.relation}:${edge.to}`)
       .digest('hex').slice(0, 16);
-
     await this.upsertNode(sessionId, edge.from);
     await this.upsertNode(sessionId, edge.to);
-
     await this.db.run(
       `INSERT OR REPLACE INTO graph_edges
        (id, session_id, from_entity, relation, to_entity, confidence, memory_id, created_at)
@@ -253,22 +287,174 @@ JSON array:`;
     );
   }
 
-  /**
-   * Cosine similarity between two vectors
-   */
   private cosineSimilarity(a: number[], b: number[]): number {
     let dot = 0, magA = 0, magB = 0;
     for (let i = 0; i < a.length; i++) {
-      dot += a[i] * b[i];
-      magA += a[i] * a[i];
-      magB += b[i] * b[i];
+      dot += (a[i] ?? 0) * (b[i] ?? 0);
+      magA += (a[i] ?? 0) * (a[i] ?? 0);
+      magB += (b[i] ?? 0) * (b[i] ?? 0);
     }
     const denom = Math.sqrt(magA) * Math.sqrt(magB);
     return denom === 0 ? 0 : dot / denom;
   }
 
   /**
-   * Store a memory entry
+   * Call LLM to summarize a batch of memories into consolidated entries.
+   * Returns an array of summary strings (typically 2-5 per batch).
+   */
+  private async summarizeMemories(
+    entries: MemoryEntry[],
+    model: string
+  ): Promise<string[]> {
+    const numbered = entries
+      .map((e, i) => `[${i + 1}] (${e.role}) ${e.content}`)
+      .join('\n');
+
+    const prompt = `You are a memory consolidation system. Given these conversation memories, produce 2-5 concise summary entries that preserve all important facts: names, dates, decisions, preferences, and technical details. Each summary should be a single dense sentence or short paragraph. Return ONLY a JSON array of strings.
+
+Memories:
+${numbered}
+
+JSON array of summary strings:`;
+
+    try {
+      const response = await fetch(`${this.embeddingUrl}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          prompt,
+          stream: false,
+          options: { temperature: 0.2, num_predict: 800 }
+        }),
+        signal: AbortSignal.timeout(60000)
+      });
+
+      if (!response.ok) return [];
+      const data = await response.json() as { response: string };
+      const raw = data.response.trim();
+      const match = raw.match(/\[[\s\S]*\]/);
+      if (!match) return [];
+      const summaries = JSON.parse(match[0]) as string[];
+      return summaries.filter(s => typeof s === 'string' && s.trim().length > 0);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * v0.4: Consolidate working memories into long-term summaries.
+   *
+   * Takes the oldest `batch` working memories (excluding the `keep` most recent),
+   * summarizes them via LLM, stores summaries as `long_term` tier, and archives
+   * the originals.
+   *
+   * @example
+   * ```typescript
+   * const result = await memory.consolidate('session_1');
+   * // → { summarized: 50, created: 4, archived: 50 }
+   *
+   * // Preview without writing
+   * const preview = await memory.consolidate('session_1', { dryRun: true });
+   * // → { summarized: 50, created: 0, archived: 0, previews: ['...', '...'] }
+   * ```
+   */
+  async consolidate(
+    sessionId: string,
+    options: ConsolidateOptions = {}
+  ): Promise<ConsolidationResult> {
+    await this.init();
+
+    const batch = options.batch ?? this.consolidateBatch;
+    const keep = options.keep ?? this.consolidateKeep;
+    const model = options.model ?? this.consolidateModel;
+
+    // Fetch working memories oldest-first, excluding the N most recent
+    const rows = await this.db.all(
+      `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from
+       FROM memories
+       WHERE session_id = ? AND tier = 'working'
+       ORDER BY timestamp ASC
+       LIMIT ?`,
+      [sessionId, batch + keep]
+    );
+
+    // Drop the most recent `keep` entries — leave them as working memory
+    const candidates = rows.slice(0, Math.max(0, rows.length - keep));
+
+    if (candidates.length === 0) {
+      return { summarized: 0, created: 0, archived: 0 };
+    }
+
+    const entries: MemoryEntry[] = candidates.map((row: any) => ({
+      id: row.id,
+      sessionId: row.session_id,
+      content: row.content,
+      role: row.role,
+      timestamp: new Date(row.timestamp),
+      tier: row.tier as MemoryTier,
+      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+    }));
+
+    // Get summaries from LLM
+    const summaries = await this.summarizeMemories(entries, model);
+
+    if (summaries.length === 0) {
+      return { summarized: entries.length, created: 0, archived: 0 };
+    }
+
+    if (options.dryRun) {
+      return {
+        summarized: entries.length,
+        created: 0,
+        archived: 0,
+        previews: summaries
+      };
+    }
+
+    const sourceIds = entries.map(e => e.id);
+    const consolidatedFromJson = JSON.stringify(sourceIds);
+
+    // Store each summary as a long_term memory
+    for (const summary of summaries) {
+      const id = createHash('sha256')
+        .update(`${sessionId}:lt:${summary}:${Date.now()}`)
+        .digest('hex').slice(0, 16);
+      const contentHash = createHash('sha256').update(summary).digest('hex').slice(0, 16);
+
+      // Embed the summary
+      let embeddingJson: string | null = null;
+      if (this.semanticSearch) {
+        const vector = await this.embed(summary);
+        if (vector) embeddingJson = JSON.stringify(vector);
+      }
+
+      await this.db.run(
+        `INSERT INTO memories
+         (id, session_id, content, role, timestamp, metadata, content_hash, embedding, tier, consolidated_from)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'long_term', ?)`,
+        [id, sessionId, summary.slice(0, this.maxContextLength), 'system',
+         Date.now(), null, contentHash, embeddingJson, consolidatedFromJson]
+      );
+    }
+
+    // Archive the originals
+    const placeholders = sourceIds.map(() => '?').join(',');
+    await this.db.run(
+      `UPDATE memories SET tier = 'archived' WHERE id IN (${placeholders})`,
+      sourceIds
+    );
+
+    return {
+      summarized: entries.length,
+      created: summaries.length,
+      archived: entries.length
+    };
+  }
+
+  /**
+   * Store a memory entry. With autoConsolidate enabled, triggers consolidation
+   * when working memory count exceeds the configured threshold.
    */
   async remember(
     sessionId: string,
@@ -285,7 +471,6 @@ JSON array:`;
     const contentHash = createHash('sha256').update(content).digest('hex').slice(0, 16);
     const truncated = content.slice(0, this.maxContextLength);
 
-    // Fetch embedding
     let embeddingJson: string | null = null;
     if (this.semanticSearch) {
       const vector = await this.embed(truncated);
@@ -294,12 +479,14 @@ JSON array:`;
 
     const entry: MemoryEntry = {
       id, sessionId, content: truncated, role,
-      timestamp: new Date(), metadata
+      timestamp: new Date(), tier: 'working',
+      ...(metadata !== undefined && { metadata })
     };
 
     await this.db.run(
-      `INSERT INTO memories (id, session_id, content, role, timestamp, metadata, content_hash, embedding)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO memories
+       (id, session_id, content, role, timestamp, metadata, content_hash, embedding, tier)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working')`,
       [id, sessionId, truncated, role, entry.timestamp.getTime(),
        metadata ? JSON.stringify(metadata) : null, contentHash, embeddingJson]
     );
@@ -312,11 +499,24 @@ JSON array:`;
       }
     }
 
+    // v0.4: Auto-consolidate if threshold exceeded
+    if (this.autoConsolidate) {
+      const countRow = await this.db.get(
+        `SELECT COUNT(*) as count FROM memories WHERE session_id = ? AND tier = 'working'`,
+        [sessionId]
+      );
+      if ((countRow?.count ?? 0) > this.consolidateThreshold) {
+        // Fire-and-forget — don't block the caller
+        this.consolidate(sessionId).catch(() => {});
+      }
+    }
+
     return entry;
   }
 
   /**
-   * Recall memories with optional graph traversal
+   * Recall memories. Searches working and long_term tiers by default.
+   * Archived memories (consolidated originals) are excluded unless explicitly requested.
    */
   async recall(
     sessionId: string,
@@ -326,30 +526,45 @@ JSON array:`;
   ): Promise<MemoryEntry[]> {
     await this.init();
 
+    const tiers = options.tiers ?? ['working', 'long_term'];
+    const tierPlaceholders = tiers.map(() => '?').join(',');
+
     let sql = `
-      SELECT id, session_id, content, role, timestamp, metadata, embedding
-      FROM memories WHERE session_id = ?
+      SELECT id, session_id, content, role, timestamp, metadata, embedding, tier, consolidated_from
+      FROM memories WHERE session_id = ? AND tier IN (${tierPlaceholders})
     `;
-    const params: (string | number)[] = [sessionId];
+    const params: (string | number)[] = [sessionId, ...tiers];
 
     if (options.role) { sql += ` AND role = ?`; params.push(options.role); }
     if (options.after) { sql += ` AND timestamp >= ?`; params.push(options.after.getTime()); }
     if (options.before) { sql += ` AND timestamp <= ?`; params.push(options.before.getTime()); }
 
+    const mapRow = (row: any, similarity?: number): MemoryEntry => {
+      const entry: MemoryEntry = {
+        id: row.id,
+        sessionId: row.session_id,
+        content: row.content,
+        role: row.role,
+        timestamp: new Date(row.timestamp),
+        tier: row.tier as MemoryTier,
+      };
+      if (row.consolidated_from) entry.consolidatedFrom = JSON.parse(row.consolidated_from);
+      if (row.metadata) entry.metadata = JSON.parse(row.metadata);
+      if (similarity !== undefined) entry.similarity = similarity;
+      return entry;
+    };
+
     // Semantic search
     if (query && query.trim() && this.semanticSearch) {
       const queryVector = await this.embed(query);
       if (queryVector) {
-        sql += ` ORDER BY timestamp DESC`;
-        const rows = await this.db.all(sql, params);
-
+        const rows = await this.db.all(sql + ` ORDER BY timestamp DESC`, params);
         const scored = rows
           .map((row: any) => {
             let similarity = 0;
             if (row.embedding) {
               try {
-                const vec: number[] = JSON.parse(row.embedding);
-                similarity = this.cosineSimilarity(queryVector, vec);
+                similarity = this.cosineSimilarity(queryVector, JSON.parse(row.embedding));
               } catch { /* skip */ }
             }
             return { row, similarity };
@@ -357,21 +572,11 @@ JSON array:`;
           .sort((a, b) => b.similarity - a.similarity)
           .slice(0, limit);
 
-        const results = scored.map(({ row, similarity }) => ({
-          id: row.id,
-          sessionId: row.session_id,
-          content: row.content,
-          role: row.role,
-          timestamp: new Date(row.timestamp),
-          metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
-          similarity
-        }));
+        const results = scored.map(({ row, similarity }) => mapRow(row, similarity));
 
-        // v0.3: Augment with graph-connected memories
         if (this.graphMemory && options.includeGraph !== false) {
           return this.augmentWithGraph(sessionId, results, limit);
         }
-
         return results;
       }
     }
@@ -389,29 +594,18 @@ JSON array:`;
     params.push(limit);
 
     const rows = await this.db.all(sql, params);
-    return rows.map((row: any) => ({
-      id: row.id,
-      sessionId: row.session_id,
-      content: row.content,
-      role: row.role,
-      timestamp: new Date(row.timestamp),
-      metadata: row.metadata ? JSON.parse(row.metadata) : undefined
-    }));
+    return rows.map((row: any) => mapRow(row));
   }
 
-  /**
-   * Augment recall results with graph-connected memories
-   */
   private async augmentWithGraph(
     sessionId: string,
     results: MemoryEntry[],
     limit: number
   ): Promise<MemoryEntry[]> {
-    // Collect memory IDs that appear in graph edges
     const seenIds = new Set(results.map(r => r.id));
     const graphMemoryIds = new Set<string>();
 
-    for (const result of results.slice(0, 3)) { // Only expand top 3
+    for (const result of results.slice(0, 3)) {
       const edges = await this.db.all(
         `SELECT memory_id FROM graph_edges WHERE session_id = ? AND memory_id IS NOT NULL
          AND (from_entity IN (
@@ -430,11 +624,10 @@ JSON array:`;
 
     if (graphMemoryIds.size === 0) return results;
 
-    // Fetch connected memories
     const placeholders = Array.from(graphMemoryIds).map(() => '?').join(',');
     const connectedRows = await this.db.all(
-      `SELECT id, session_id, content, role, timestamp, metadata FROM memories
-       WHERE id IN (${placeholders})`,
+      `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from
+       FROM memories WHERE id IN (${placeholders})`,
       Array.from(graphMemoryIds)
     );
 
@@ -444,28 +637,24 @@ JSON array:`;
       content: row.content,
       role: row.role,
       timestamp: new Date(row.timestamp),
+      tier: row.tier as MemoryTier,
+      consolidatedFrom: row.consolidated_from ? JSON.parse(row.consolidated_from) : undefined,
       metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
-      similarity: 0 // Graph-connected, not vector-matched
+      similarity: 0
     }));
 
     return [...results, ...connected].slice(0, limit);
   }
 
-  /**
-   * v0.3: Query the knowledge graph for an entity
-   */
   async graph(sessionId: string, entity: string): Promise<GraphResult> {
     await this.init();
     const ent = entity.toLowerCase().trim();
 
-    // Outgoing edges
     const outgoing = await this.db.all(
       `SELECT relation, to_entity, confidence, memory_id FROM graph_edges
        WHERE session_id = ? AND from_entity = ?`,
       [sessionId, ent]
     );
-
-    // Incoming edges
     const incoming = await this.db.all(
       `SELECT relation, from_entity, confidence, memory_id FROM graph_edges
        WHERE session_id = ? AND to_entity = ?`,
@@ -487,7 +676,6 @@ JSON array:`;
       }))
     ];
 
-    // Get source memories
     const memoryIds = [
       ...outgoing.map((e: any) => e.memory_id),
       ...incoming.map((e: any) => e.memory_id)
@@ -497,7 +685,7 @@ JSON array:`;
     if (memoryIds.length > 0) {
       const placeholders = memoryIds.map(() => '?').join(',');
       const rows = await this.db.all(
-        `SELECT id, session_id, content, role, timestamp, metadata
+        `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from
          FROM memories WHERE id IN (${placeholders})`,
         memoryIds
       );
@@ -507,6 +695,8 @@ JSON array:`;
         content: row.content,
         role: row.role,
         timestamp: new Date(row.timestamp),
+        tier: row.tier as MemoryTier,
+        consolidatedFrom: row.consolidated_from ? JSON.parse(row.consolidated_from) : undefined,
         metadata: row.metadata ? JSON.parse(row.metadata) : undefined
       }));
     }
@@ -514,31 +704,29 @@ JSON array:`;
     return { entity: ent, relationships, relatedMemories };
   }
 
-  /**
-   * Get recent conversation history
-   */
   async history(sessionId: string, limit: number = 20): Promise<MemoryEntry[]> {
     return this.recall(sessionId, undefined, limit, {});
   }
 
-  /**
-   * Delete memories
-   */
   async forget(
     sessionId: string,
-    options?: { before?: Date; id?: string }
+    options?: { before?: Date; id?: string; includeLongTerm?: boolean }
   ): Promise<number> {
     await this.init();
 
+    const tiers = options?.includeLongTerm
+      ? `('working', 'long_term', 'archived')`
+      : `('working', 'long_term')`;
+
     if (options?.id) {
       const result = await this.db.run(
-        'DELETE FROM memories WHERE session_id = ? AND id = ?',
+        `DELETE FROM memories WHERE session_id = ? AND id = ?`,
         [sessionId, options.id]
       );
       return result.changes || 0;
     }
 
-    let sql = 'DELETE FROM memories WHERE session_id = ?';
+    let sql = `DELETE FROM memories WHERE session_id = ? AND tier IN ${tiers}`;
     const params: (string | number)[] = [sessionId];
 
     if (options?.before) {
@@ -550,12 +738,10 @@ JSON array:`;
     return result.changes || 0;
   }
 
-  /**
-   * Memory statistics
-   */
   async stats(sessionId: string): Promise<{
     total: number;
     byRole: Record<string, number>;
+    byTier: Record<MemoryTier, number>;
     oldest: Date | null;
     newest: Date | null;
     withEmbeddings: number;
@@ -565,43 +751,65 @@ JSON array:`;
     await this.init();
 
     const totalRow = await this.db.get(
-      'SELECT COUNT(*) as count FROM memories WHERE session_id = ?', [sessionId]
+      `SELECT COUNT(*) as count FROM memories WHERE session_id = ? AND tier != 'archived'`,
+      [sessionId]
     );
     const roleRows = await this.db.all(
-      'SELECT role, COUNT(*) as count FROM memories WHERE session_id = ? GROUP BY role', [sessionId]
+      `SELECT role, COUNT(*) as count FROM memories WHERE session_id = ? AND tier != 'archived' GROUP BY role`,
+      [sessionId]
     );
+    const tierRows = await this.db.all(
+      `SELECT tier, COUNT(*) as count FROM memories WHERE session_id = ? GROUP BY tier`,
+      [sessionId]
+    );
+
     const byRole: Record<string, number> = {};
     roleRows.forEach((row: any) => { byRole[row.role] = row.count; });
 
+    const byTier: Record<MemoryTier, number> = { working: 0, long_term: 0, archived: 0 };
+    tierRows.forEach((row: any) => { byTier[row.tier as MemoryTier] = row.count; });
+
     const range = await this.db.get(
-      'SELECT MIN(timestamp) as oldest, MAX(timestamp) as newest FROM memories WHERE session_id = ?',
+      `SELECT MIN(timestamp) as oldest, MAX(timestamp) as newest
+       FROM memories WHERE session_id = ? AND tier != 'archived'`,
       [sessionId]
     );
     const embRow = await this.db.get(
-      'SELECT COUNT(*) as count FROM memories WHERE session_id = ? AND embedding IS NOT NULL',
+      `SELECT COUNT(*) as count FROM memories
+       WHERE session_id = ? AND tier != 'archived' AND embedding IS NOT NULL`,
       [sessionId]
     );
 
-    const stats: ReturnType<typeof this.stats> extends Promise<infer T> ? T : never = {
+    const result: {
+      total: number;
+      byRole: Record<string, number>;
+      byTier: Record<MemoryTier, number>;
+      oldest: Date | null;
+      newest: Date | null;
+      withEmbeddings: number;
+      graphNodes?: number;
+      graphEdges?: number;
+    } = {
       total: totalRow?.count || 0,
       byRole,
+      byTier,
       oldest: range?.oldest ? new Date(range.oldest) : null,
       newest: range?.newest ? new Date(range.newest) : null,
-      withEmbeddings: embRow?.count || 0
+      withEmbeddings: embRow?.count || 0,
     };
 
     if (this.graphMemory) {
       const nodeRow = await this.db.get(
-        'SELECT COUNT(*) as count FROM graph_nodes WHERE session_id = ?', [sessionId]
+        `SELECT COUNT(*) as count FROM graph_nodes WHERE session_id = ?`, [sessionId]
       );
       const edgeRow = await this.db.get(
-        'SELECT COUNT(*) as count FROM graph_edges WHERE session_id = ?', [sessionId]
+        `SELECT COUNT(*) as count FROM graph_edges WHERE session_id = ?`, [sessionId]
       );
-      stats.graphNodes = nodeRow?.count || 0;
-      stats.graphEdges = edgeRow?.count || 0;
+      result.graphNodes = nodeRow?.count || 0;
+      result.graphEdges = edgeRow?.count || 0;
     }
 
-    return stats;
+    return result;
   }
 
   async close(): Promise<void> {
