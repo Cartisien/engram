@@ -1,6 +1,6 @@
 # Engram
 
-> **Persistent semantic memory for AI agents.**
+> **Persistent semantic memory for AI agents — local-first, zero cloud required.**
 
 ![Engram demo](assets/demo.gif)
 
@@ -23,19 +23,27 @@ const context = await memory.recall('user_123', 'what are the user\'s preference
 
 AI assistants are amnesiacs. Every conversation starts fresh. Context windows fill up. Important details get lost.
 
-Stuffing everything into the system prompt wastes tokens and still misses things. You need a retrieval layer — not a dump.
+Most memory systems fix retrieval but ignore the harder problem: **memories go stale, contradict each other, and vary in confidence.** Your agent ends up recalling outdated facts with the same certainty as confirmed ones.
+
+And most send your memory content to OpenAI or another cloud LLM to process it — which means your agent's private context leaves your machine.
 
 ## The Solution
 
-Engram gives your agents **persistent, semantically searchable memory** — SQLite-backed, TypeScript-first, zero config.
+Engram gives your agents **persistent, evolving memory** — SQLite-backed, local-first, TypeScript and Python SDKs.
 
-- **Semantic search:** Finds relevant memories by meaning, not just keywords (via local Ollama embeddings)
-- **Graph memory:** Extracts entity-relationship triples — recall connected context automatically
-- **Consolidation:** Summarizes old memories into long-term entries so context stays dense, not noisy
-- **Zero config:** Works out of the box, falls back to keyword search without Ollama
-- **Local-first:** Your data stays on your machine. No API keys, no cloud required
+Memories aren't just stored. They're beliefs that evolve.
+
+- **Local-first:** Memory never leaves your machine. All LLM processing uses local Ollama by default — no cloud, no API keys, no data leaving your infrastructure
+- **Belief revision:** Every memory has a `certainty` score. `reinforce()` to confirm, `contradict()` to challenge, `invalidate()` to supersede. Outdated beliefs don't haunt your agent.
+- **reflect():** Synthesize insights across memories before a task — not just retrieval, actual reasoning
+- **Multi-strategy recall:** Semantic + BM25 keyword + temporal recency, merged via Reciprocal Rank Fusion
+- **Importance scoring:** Heuristic scoring at write time. High-importance memories are protected from consolidation.
+- **Graph memory:** Entity-relationship extraction — recall connected context automatically
+- **Consolidation:** LLM summarizes old working memories into long-term entries. High-certainty memories are never compressed.
 - **MCP-native:** Drop into Claude Desktop or Cursor via [`@cartisien/engram-mcp`](https://github.com/Cartisien/engram-mcp)
-- **Typed:** Full TypeScript support
+- **Typed:** Full TypeScript + Python SDK at feature parity
+
+> **Privacy note:** Engram defaults to local Ollama for all LLM operations (graph extraction, consolidation, importance scoring, reflection). Cloud is opt-in via `EngramClient`. Your agent's memory stays on your infrastructure.
 
 ## Installation
 
