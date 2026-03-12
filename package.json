@@ -1,6 +1,6 @@
 {
   "name": "@cartisien/engram",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Persistent memory for AI assistants. SQLite-backed conversational memory with semantic search.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

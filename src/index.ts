@@ -11,6 +11,7 @@ export interface MemoryEntry {
   timestamp: Date;
   tier: MemoryTier;
   consolidatedFrom?: string[];  // v0.4: source IDs for long_term entries
+  importance: number;           // v0.8: 0.0–1.0, higher = more important
   metadata?: Record<string, unknown>;
   similarity?: number;
 }
@@ -57,6 +58,7 @@ export interface UserMemoryEntry {
   timestamp: Date;
   tier: MemoryTier;
   consolidatedFrom?: string[];
+  importance: number;           // v0.8: 0.0–1.0
   metadata?: Record<string, unknown>;
   similarity?: number;
 }
@@ -89,6 +91,10 @@ export interface EngramConfig {
   consolidateKeep?: number;        // keep N most recent working memories as-is (default: 20)
   consolidateBatch?: number;       // process N memories per consolidation run (default: 50)
   consolidateModel?: string;       // Ollama model for summarization (default: qwen2.5:32b)
+  // v0.8: importance scoring
+  importanceScoring?: boolean;     // score importance at write time via LLM (default: false)
+  importanceModel?: string;        // Ollama model for scoring (default: same as graphModel)
+  importanceThreshold?: number;    // memories at/above this are protected from consolidation (default: 0.8)
 }
 
 /**
@@ -128,6 +134,9 @@ export class Engram {
   private consolidateKeep: number;
   private consolidateBatch: number;
   private consolidateModel: string;
+  private importanceScoring: boolean;
+  private importanceModel: string;
+  private importanceThreshold: number;
 
   constructor(config: EngramConfig = {}) {
     this.dbPath = config.dbPath || ':memory:';
@@ -142,6 +151,9 @@ export class Engram {
     this.consolidateKeep = config.consolidateKeep ?? 20;
     this.consolidateBatch = config.consolidateBatch ?? 50;
     this.consolidateModel = config.consolidateModel || config.graphModel || 'qwen2.5:32b';
+    this.importanceScoring = config.importanceScoring === true;
+    this.importanceModel = config.importanceModel || config.graphModel || 'qwen2.5:32b';
+    this.importanceThreshold = config.importanceThreshold ?? 0.8;
   }
 
   private async init(): Promise<void> {
@@ -176,6 +188,7 @@ export class Engram {
       `ALTER TABLE memories ADD COLUMN embedding TEXT`,
       `ALTER TABLE memories ADD COLUMN tier TEXT NOT NULL DEFAULT 'working'`,
       `ALTER TABLE memories ADD COLUMN consolidated_from TEXT`,
+      `ALTER TABLE memories ADD COLUMN importance REAL NOT NULL DEFAULT 0.5`,
     ];
     for (const m of migrations) {
       try { await this.db.exec(m); } catch { /* column exists */ }
@@ -233,7 +246,8 @@ export class Engram {
         content_hash TEXT NOT NULL,
         embedding TEXT,
         tier TEXT NOT NULL DEFAULT 'working',
-        consolidated_from TEXT
+        consolidated_from TEXT,
+        importance REAL NOT NULL DEFAULT 0.5
       );
       CREATE INDEX IF NOT EXISTS idx_user_timestamp
         ON user_memories(user_id, timestamp DESC);
@@ -321,6 +335,88 @@ JSON array:`;
     );
   }
 
+  /**
+   * v0.8: Heuristic importance scorer — instant, no LLM needed.
+   * Signals: preferences/decisions/goals → high; small talk → low.
+   */
+  private scoreImportanceHeuristic(content: string): number {
+    const text = content.toLowerCase();
+    let score = 0.5;
+
+    // High-signal phrases
+    const highSignal = [
+      'prefer', 'always', 'never', 'important', 'remember', 'critical',
+      'must', 'need to', 'goal', 'decision', 'decided', 'agreed', 'confirmed',
+      'password', 'api key', 'token', 'secret', 'deadline', 'due',
+    ];
+    // Low-signal phrases
+    const lowSignal = [
+      'thanks', 'thank you', 'ok', 'okay', 'sure', 'got it', 'sounds good',
+      'hello', 'hi', 'hey', 'bye', 'goodbye', 'lol', 'haha',
+    ];
+
+    const highMatches = highSignal.filter(s => text.includes(s)).length;
+    const lowMatches  = lowSignal.filter(s => text.includes(s)).length;
+
+    score += highMatches * 0.08;
+    score -= lowMatches * 0.08;
+
+    // Dates and numbers → specificity → higher importance
+    const datePattern = /\b\d{4}-\d{2}-\d{2}\b|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i;
+    if (datePattern.test(content)) score += 0.07;
+    if (/\$[\d,]+|\d+%|\b\d{4,}\b/.test(content)) score += 0.05;
+
+    // Longer = more specific = probably more important
+    if (content.length > 200) score += 0.05;
+    if (content.length < 30)  score -= 0.05;
+
+    return Math.min(1.0, Math.max(0.0, Math.round(score * 100) / 100));
+  }
+
+  /**
+   * v0.8: LLM importance scorer. Falls back to heuristic on failure.
+   */
+  private async scoreImportanceLLM(content: string): Promise<number> {
+    const prompt = `Rate the importance of this memory for an AI agent on a scale from 0.0 to 1.0.
+
+High (0.8–1.0): user preferences, decisions, goals, constraints, credentials, deadlines, facts.
+Medium (0.4–0.7): context, background info, situational details.
+Low (0.0–0.3): casual remarks, pleasantries, obvious or temporary info.
+
+Return ONLY a decimal number between 0.0 and 1.0. Nothing else.
+
+Memory: "${content.slice(0, 300)}"`;
+
+    try {
+      const response = await fetch(`${this.embeddingUrl}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.importanceModel,
+          prompt,
+          stream: false,
+          options: { temperature: 0, num_predict: 8 }
+        }),
+        signal: AbortSignal.timeout(8000)
+      });
+      if (!response.ok) return this.scoreImportanceHeuristic(content);
+      const data = await response.json() as { response: string };
+      const match = data.response.trim().match(/^(1\.0|0?\.\d+|\d+\.\d+)/);
+      if (!match) return this.scoreImportanceHeuristic(content);
+      const score = parseFloat(match[1] ?? '0');
+      return isNaN(score) ? this.scoreImportanceHeuristic(content)
+                          : Math.min(1.0, Math.max(0.0, Math.round(score * 100) / 100));
+    } catch {
+      return this.scoreImportanceHeuristic(content);
+    }
+  }
+
+  private async scoreImportance(content: string): Promise<number> {
+    return this.importanceScoring
+      ? this.scoreImportanceLLM(content)
+      : this.scoreImportanceHeuristic(content);
+  }
+
   private cosineSimilarity(a: number[], b: number[]): number {
     let dot = 0, magA = 0, magB = 0;
     for (let i = 0; i < a.length; i++) {
@@ -404,13 +500,14 @@ JSON array of summary strings:`;
     const model = options.model ?? this.consolidateModel;
 
     // Fetch working memories oldest-first, excluding the N most recent
+    // v0.8: also exclude high-importance memories (they survive consolidation)
     const rows = await this.db.all(
-      `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from
+      `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from, importance
        FROM memories
-       WHERE session_id = ? AND tier = 'working'
+       WHERE session_id = ? AND tier = 'working' AND importance < ?
        ORDER BY timestamp ASC
        LIMIT ?`,
-      [sessionId, batch + keep]
+      [sessionId, this.importanceThreshold, batch + keep]
     );
 
     // Drop the most recent `keep` entries — leave them as working memory
@@ -427,6 +524,7 @@ JSON array of summary strings:`;
       role: row.role,
       timestamp: new Date(row.timestamp),
       tier: row.tier as MemoryTier,
+      importance: typeof row.importance === 'number' ? row.importance : 0.5,
       metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
     }));
 
@@ -511,18 +609,20 @@ JSON array of summary strings:`;
       if (vector) embeddingJson = JSON.stringify(vector);
     }
 
+    const importance = await this.scoreImportance(truncated);
+
     const entry: MemoryEntry = {
       id, sessionId, content: truncated, role,
-      timestamp: new Date(), tier: 'working',
+      timestamp: new Date(), tier: 'working', importance,
       ...(metadata !== undefined && { metadata })
     };
 
     await this.db.run(
       `INSERT INTO memories
-       (id, session_id, content, role, timestamp, metadata, content_hash, embedding, tier)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working')`,
+       (id, session_id, content, role, timestamp, metadata, content_hash, embedding, tier, importance)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?)`,
       [id, sessionId, truncated, role, entry.timestamp.getTime(),
-       metadata ? JSON.stringify(metadata) : null, contentHash, embeddingJson]
+       metadata ? JSON.stringify(metadata) : null, contentHash, embeddingJson, importance]
     );
 
     // v0.3: Extract graph relationships
@@ -564,7 +664,7 @@ JSON array of summary strings:`;
     const tierPlaceholders = tiers.map(() => '?').join(',');
 
     let sql = `
-      SELECT id, session_id, content, role, timestamp, metadata, embedding, tier, consolidated_from
+      SELECT id, session_id, content, role, timestamp, metadata, embedding, tier, consolidated_from, importance
       FROM memories WHERE session_id = ? AND tier IN (${tierPlaceholders})
     `;
     const params: (string | number)[] = [sessionId, ...tiers];
@@ -581,6 +681,7 @@ JSON array of summary strings:`;
         role: row.role,
         timestamp: new Date(row.timestamp),
         tier: row.tier as MemoryTier,
+        importance: typeof row.importance === 'number' ? row.importance : 0.5,
       };
       if (row.consolidated_from) entry.consolidatedFrom = JSON.parse(row.consolidated_from);
       if (row.metadata) entry.metadata = JSON.parse(row.metadata);
@@ -601,12 +702,16 @@ JSON array of summary strings:`;
                 similarity = this.cosineSimilarity(queryVector, JSON.parse(row.embedding));
               } catch { /* skip */ }
             }
-            return { row, similarity };
+            const importance = typeof row.importance === 'number' ? row.importance : 0.5;
+            // v0.8: blend similarity + importance for ranking
+            const rankScore = similarity * 0.7 + importance * 0.3;
+            return { row, similarity, rankScore };
           })
-          .sort((a, b) => b.similarity - a.similarity)
+          .sort((a, b) => b.rankScore - a.rankScore)
           .slice(0, limit);
 
         const results = scored.map(({ row, similarity }) => mapRow(row, similarity));
+
 
         if (this.graphMemory && options.includeGraph !== false) {
           const graphAugmented = await this.augmentWithGraph(sessionId, results, limit);
@@ -659,6 +764,7 @@ JSON array of summary strings:`;
           role: u.role,
           timestamp: u.timestamp,
           tier: u.tier,
+          importance: u.importance,
           metadata: { ...(u.metadata ?? {}), _userMemory: true, userId: u.userId },
         };
         if (u.consolidatedFrom) adapted.consolidatedFrom = u.consolidatedFrom;
@@ -699,7 +805,7 @@ JSON array of summary strings:`;
 
     const placeholders = Array.from(graphMemoryIds).map(() => '?').join(',');
     const connectedRows = await this.db.all(
-      `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from
+      `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from, importance
        FROM memories WHERE id IN (${placeholders})`,
       Array.from(graphMemoryIds)
     );
@@ -711,6 +817,7 @@ JSON array of summary strings:`;
       role: row.role,
       timestamp: new Date(row.timestamp),
       tier: row.tier as MemoryTier,
+      importance: typeof row.importance === 'number' ? row.importance : 0.5,
       consolidatedFrom: row.consolidated_from ? JSON.parse(row.consolidated_from) : undefined,
       metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
       similarity: 0
@@ -758,7 +865,7 @@ JSON array of summary strings:`;
     if (memoryIds.length > 0) {
       const placeholders = memoryIds.map(() => '?').join(',');
       const rows = await this.db.all(
-        `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from
+        `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from, importance
          FROM memories WHERE id IN (${placeholders})`,
         memoryIds
       );
@@ -769,6 +876,7 @@ JSON array of summary strings:`;
         role: row.role,
         timestamp: new Date(row.timestamp),
         tier: row.tier as MemoryTier,
+        importance: typeof row.importance === 'number' ? row.importance : 0.5,
         consolidatedFrom: row.consolidated_from ? JSON.parse(row.consolidated_from) : undefined,
         metadata: row.metadata ? JSON.parse(row.metadata) : undefined
       }));
@@ -781,7 +889,7 @@ JSON array of summary strings:`;
     await this.init();
     // Fetch newest N, then sort ASC for chronological display
     const rows = await this.db.all(
-      `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from
+      `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from, importance
        FROM (
          SELECT * FROM memories
          WHERE session_id = ? AND tier IN ('working', 'long_term')
@@ -793,6 +901,7 @@ JSON array of summary strings:`;
       const entry: MemoryEntry = {
         id: row.id, sessionId: row.session_id, content: row.content,
         role: row.role, timestamp: new Date(row.timestamp), tier: row.tier as MemoryTier,
+        importance: typeof row.importance === 'number' ? row.importance : 0.5,
       };
       if (row.consolidated_from) entry.consolidatedFrom = JSON.parse(row.consolidated_from);
       if (row.metadata) entry.metadata = JSON.parse(row.metadata);
@@ -904,6 +1013,24 @@ JSON array of summary strings:`;
     return result;
   }
 
+  /**
+   * v0.8: Manually set the importance of a memory (0.0–1.0).
+   * Use to protect a memory from consolidation or boost its recall rank.
+   *
+   * @example
+   * ```typescript
+   * await memory.setImportance(entryId, 0.95); // protected from consolidation
+   * await memory.setImportance(entryId, 0.1);  // low priority, consolidate first
+   * ```
+   */
+  async setImportance(id: string, importance: number): Promise<void> {
+    await this.init();
+    const clamped = Math.min(1.0, Math.max(0.0, importance));
+    // Try both memories and user_memories tables
+    await this.db.run(`UPDATE memories SET importance = ? WHERE id = ?`, [clamped, id]);
+    await this.db.run(`UPDATE user_memories SET importance = ? WHERE id = ?`, [clamped, id]);
+  }
+
   // ── v0.5: User-scoped memory (cross-session) ──────────────────────────────
 
   private mapUserRow(row: any, similarity?: number): UserMemoryEntry {
@@ -914,6 +1041,7 @@ JSON array of summary strings:`;
       role: row.role,
       timestamp: new Date(row.timestamp),
       tier: row.tier as MemoryTier,
+      importance: typeof row.importance === 'number' ? row.importance : 0.5,
     };
     if (row.consolidated_from) entry.consolidatedFrom = JSON.parse(row.consolidated_from);
     if (row.metadata) entry.metadata = JSON.parse(row.metadata);
@@ -957,17 +1085,19 @@ JSON array of summary strings:`;
       if (vector) embeddingJson = JSON.stringify(vector);
     }
 
+    const importance = await this.scoreImportance(truncated);
+
     await this.db.run(
       `INSERT INTO user_memories
-       (id, user_id, content, role, timestamp, metadata, content_hash, embedding, tier)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working')`,
+       (id, user_id, content, role, timestamp, metadata, content_hash, embedding, tier, importance)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?)`,
       [id, userId, truncated, role, Date.now(),
-       metadata ? JSON.stringify(metadata) : null, contentHash, embeddingJson]
+       metadata ? JSON.stringify(metadata) : null, contentHash, embeddingJson, importance]
     );
 
     const entry: UserMemoryEntry = {
       id, userId, content: truncated, role,
-      timestamp: new Date(), tier: 'working',
+      timestamp: new Date(), tier: 'working', importance,
       ...(metadata !== undefined && { metadata })
     };
     return entry;
@@ -1076,9 +1206,9 @@ JSON array of summary strings:`;
     const model = options.model ?? this.consolidateModel;
 
     const rows = await this.db.all(
-      `SELECT * FROM user_memories WHERE user_id = ? AND tier = 'working'
+      `SELECT * FROM user_memories WHERE user_id = ? AND tier = 'working' AND importance < ?
        ORDER BY timestamp ASC LIMIT ?`,
-      [userId, batch + keep]
+      [userId, this.importanceThreshold, batch + keep]
     );
 
     const candidates = rows.slice(0, Math.max(0, rows.length - keep));
@@ -1091,6 +1221,7 @@ JSON array of summary strings:`;
       role: row.role,
       timestamp: new Date(row.timestamp),
       tier: row.tier as MemoryTier,
+      importance: typeof row.importance === 'number' ? row.importance : 0.5,
     }));
 
     const summaries = await this.summarizeMemories(entries, model);
