@@ -12,6 +12,12 @@ export interface MemoryEntry {
   tier: MemoryTier;
   consolidatedFrom?: string[];  // v0.4: source IDs for long_term entries
   importance: number;           // v0.8: 0.0–1.0, higher = more important
+  certainty: number;            // v0.9: 0.0–1.0, confidence this belief is still true
+  reinforcementCount: number;   // v0.9: how many times confirmed
+  lastVerified: Date;           // v0.9: when certainty was last updated
+  memoryType: 'episodic' | 'semantic'; // v0.9: event vs belief/fact
+  status: 'active' | 'superseded' | 'contradicted'; // v0.9: lifecycle state
+  contradicts?: string[];       // v0.9: IDs of memories this contradicts
   metadata?: Record<string, unknown>;
   similarity?: number;
 }
@@ -59,8 +65,43 @@ export interface UserMemoryEntry {
   tier: MemoryTier;
   consolidatedFrom?: string[];
   importance: number;           // v0.8: 0.0–1.0
+  certainty: number;            // v0.9: confidence score
+  reinforcementCount: number;   // v0.9: reinforcement count
+  lastVerified: Date;           // v0.9: last certainty update
+  memoryType: 'episodic' | 'semantic'; // v0.9: memory type
+  status: 'active' | 'superseded' | 'contradicted'; // v0.9: lifecycle
   metadata?: Record<string, unknown>;
   similarity?: number;
+}
+
+
+// v0.9: Contradiction detection result
+export interface ContradictionResult {
+  detected: boolean;
+  conflicting: Array<{
+    id: string;
+    content: string;
+    certainty: number;
+    similarity: number;
+  }>;
+}
+
+// v0.9: Reinforcement result
+export interface ReinforcementResult {
+  id: string;
+  certainty: number;
+  reinforcementCount: number;
+}
+
+// v0.9: Timeline event
+export interface TimelineEvent {
+  timestamp: Date;
+  event: 'created' | 'reinforced' | 'contradicted' | 'superseded' | 'consolidated';
+  memoryId: string;
+  content: string;
+  certainty?: number;
+  importance?: number;
+  relatedId?: string;
 }
 
 export interface ConsolidateOptions {
@@ -95,6 +136,10 @@ export interface EngramConfig {
   importanceScoring?: boolean;     // score importance at write time via LLM (default: false)
   importanceModel?: string;        // Ollama model for scoring (default: same as graphModel)
   importanceThreshold?: number;    // memories at/above this are protected from consolidation (default: 0.8)
+  // v0.9: belief revision
+  contradictionDetection?: boolean; // detect contradictions on remember() via LLM (default: false)
+  contradictionModel?: string;      // Ollama model for contradiction detection (default: same as graphModel)
+  defaultMemoryType?: 'episodic' | 'semantic'; // default memory type (default: 'episodic')
 }
 
 /**
@@ -137,6 +182,9 @@ export class Engram {
   private importanceScoring: boolean;
   private importanceModel: string;
   private importanceThreshold: number;
+  private contradictionDetection: boolean;
+  private contradictionModel: string;
+  private defaultMemoryType: 'episodic' | 'semantic';
 
   constructor(config: EngramConfig = {}) {
     this.dbPath = config.dbPath || ':memory:';
@@ -154,6 +202,9 @@ export class Engram {
     this.importanceScoring = config.importanceScoring === true;
     this.importanceModel = config.importanceModel || config.graphModel || 'qwen2.5:32b';
     this.importanceThreshold = config.importanceThreshold ?? 0.8;
+    this.contradictionDetection = config.contradictionDetection === true;
+    this.contradictionModel = config.contradictionModel || config.graphModel || 'qwen2.5:32b';
+    this.defaultMemoryType = config.defaultMemoryType ?? 'episodic';
   }
 
   private async init(): Promise<void> {
@@ -189,6 +240,12 @@ export class Engram {
       `ALTER TABLE memories ADD COLUMN tier TEXT NOT NULL DEFAULT 'working'`,
       `ALTER TABLE memories ADD COLUMN consolidated_from TEXT`,
       `ALTER TABLE memories ADD COLUMN importance REAL NOT NULL DEFAULT 0.5`,
+      `ALTER TABLE memories ADD COLUMN certainty REAL NOT NULL DEFAULT 0.5`,
+      `ALTER TABLE memories ADD COLUMN reinforcement_count INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE memories ADD COLUMN last_verified INTEGER`,
+      `ALTER TABLE memories ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'episodic'`,
+      `ALTER TABLE memories ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
+      `ALTER TABLE memories ADD COLUMN contradicts TEXT`,
     ];
     for (const m of migrations) {
       try { await this.db.exec(m); } catch { /* column exists */ }
@@ -247,13 +304,30 @@ export class Engram {
         embedding TEXT,
         tier TEXT NOT NULL DEFAULT 'working',
         consolidated_from TEXT,
-        importance REAL NOT NULL DEFAULT 0.5
+        importance REAL NOT NULL DEFAULT 0.5,
+        certainty REAL NOT NULL DEFAULT 0.5,
+        reinforcement_count INTEGER NOT NULL DEFAULT 0,
+        last_verified INTEGER,
+        memory_type TEXT NOT NULL DEFAULT 'episodic',
+        status TEXT NOT NULL DEFAULT 'active'
       );
       CREATE INDEX IF NOT EXISTS idx_user_timestamp
         ON user_memories(user_id, timestamp DESC);
       CREATE INDEX IF NOT EXISTS idx_user_tier
         ON user_memories(user_id, tier);
     `);
+
+    // v0.9 migrations for user_memories
+    const userMigrations = [
+      `ALTER TABLE user_memories ADD COLUMN certainty REAL NOT NULL DEFAULT 0.5`,
+      `ALTER TABLE user_memories ADD COLUMN reinforcement_count INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE user_memories ADD COLUMN last_verified INTEGER`,
+      `ALTER TABLE user_memories ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'episodic'`,
+      `ALTER TABLE user_memories ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
+    ];
+    for (const m of userMigrations) {
+      try { await this.db.exec(m); } catch { /* column exists */ }
+    }
 
     this.initialized = true;
   }
@@ -339,6 +413,49 @@ JSON array:`;
    * v0.8: Heuristic importance scorer — instant, no LLM needed.
    * Signals: preferences/decisions/goals → high; small talk → low.
    */
+  /** v0.9: Map a DB row to a full MemoryEntry */
+  private rowToEntry(row: any, similarity?: number): MemoryEntry {
+    return {
+      id: row.id,
+      sessionId: row.session_id,
+      content: row.content,
+      role: row.role,
+      timestamp: new Date(row.timestamp),
+      tier: (row.tier as MemoryTier) || 'working',
+      importance: typeof row.importance === 'number' ? row.importance : 0.5,
+      certainty: typeof row.certainty === 'number' ? row.certainty : 0.5,
+      reinforcementCount: row.reinforcement_count ?? 0,
+      lastVerified: new Date(row.last_verified ?? row.timestamp),
+      memoryType: (row.memory_type as 'episodic' | 'semantic') || 'episodic',
+      status: (row.status as 'active' | 'superseded' | 'contradicted') || 'active',
+      ...(row.contradicts ? { contradicts: JSON.parse(row.contradicts) } : {}),
+      ...(row.consolidated_from ? { consolidatedFrom: JSON.parse(row.consolidated_from) } : {}),
+      ...(row.metadata ? { metadata: JSON.parse(row.metadata) } : {}),
+      ...(similarity !== undefined ? { similarity } : {}),
+    };
+  }
+
+  /** v0.9: Map a DB row to a full UserMemoryEntry */
+  private rowToUserEntry(row: any, similarity?: number): UserMemoryEntry {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      content: row.content,
+      role: row.role,
+      timestamp: new Date(row.timestamp),
+      tier: (row.tier as MemoryTier) || 'working',
+      importance: typeof row.importance === 'number' ? row.importance : 0.5,
+      certainty: typeof row.certainty === 'number' ? row.certainty : 0.5,
+      reinforcementCount: row.reinforcement_count ?? 0,
+      lastVerified: new Date(row.last_verified ?? row.timestamp),
+      memoryType: (row.memory_type as 'episodic' | 'semantic') || 'episodic',
+      status: (row.status as 'active' | 'superseded' | 'contradicted') || 'active',
+      ...(row.consolidated_from ? { consolidatedFrom: JSON.parse(row.consolidated_from) } : {}),
+      ...(row.metadata ? { metadata: JSON.parse(row.metadata) } : {}),
+      ...(similarity !== undefined ? { similarity } : {}),
+    };
+  }
+
   private scoreImportanceHeuristic(content: string): number {
     const text = content.toLowerCase();
     let score = 0.5;
@@ -517,16 +634,7 @@ JSON array of summary strings:`;
       return { summarized: 0, created: 0, archived: 0 };
     }
 
-    const entries: MemoryEntry[] = candidates.map((row: any) => ({
-      id: row.id,
-      sessionId: row.session_id,
-      content: row.content,
-      role: row.role,
-      timestamp: new Date(row.timestamp),
-      tier: row.tier as MemoryTier,
-      importance: typeof row.importance === 'number' ? row.importance : 0.5,
-      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
-    }));
+    const entries: MemoryEntry[] = candidates.map((row: any) => this.rowToEntry(row));
 
     // Get summaries from LLM
     const summaries = await this.summarizeMemories(entries, model);
@@ -611,18 +719,29 @@ JSON array of summary strings:`;
 
     const importance = await this.scoreImportance(truncated);
 
+    const certainty = 0.5; // starts neutral; increases via reinforce()
+    const memoryType = this.defaultMemoryType;
+    const now = Date.now();
+    const contradicts = metadata?.contradicts as string[] | undefined;
+
     const entry: MemoryEntry = {
       id, sessionId, content: truncated, role,
-      timestamp: new Date(), tier: 'working', importance,
+      timestamp: new Date(now), tier: 'working', importance,
+      certainty, reinforcementCount: 0, lastVerified: new Date(now),
+      memoryType, status: 'active',
+      ...(contradicts !== undefined && { contradicts }),
       ...(metadata !== undefined && { metadata })
     };
 
     await this.db.run(
       `INSERT INTO memories
-       (id, session_id, content, role, timestamp, metadata, content_hash, embedding, tier, importance)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?)`,
-      [id, sessionId, truncated, role, entry.timestamp.getTime(),
-       metadata ? JSON.stringify(metadata) : null, contentHash, embeddingJson, importance]
+       (id, session_id, content, role, timestamp, metadata, content_hash, embedding, tier, importance,
+        certainty, reinforcement_count, last_verified, memory_type, status, contradicts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, ?, 0, ?, ?, 'active', ?)`,
+      [id, sessionId, truncated, role, now,
+       metadata ? JSON.stringify(metadata) : null, contentHash, embeddingJson, importance,
+       certainty, now, memoryType,
+       contradicts ? JSON.stringify(contradicts) : null]
     );
 
     // v0.3: Extract graph relationships
@@ -661,11 +780,13 @@ JSON array of summary strings:`;
     await this.init();
 
     const tiers = options.tiers ?? ['working', 'long_term'];
+    const statusFilter = `AND status = 'active'`;
     const tierPlaceholders = tiers.map(() => '?').join(',');
 
     let sql = `
-      SELECT id, session_id, content, role, timestamp, metadata, embedding, tier, consolidated_from, importance
-      FROM memories WHERE session_id = ? AND tier IN (${tierPlaceholders})
+      SELECT id, session_id, content, role, timestamp, metadata, embedding, tier, consolidated_from,
+             importance, certainty, reinforcement_count, last_verified, memory_type, status, contradicts
+      FROM memories WHERE session_id = ? AND tier IN (${tierPlaceholders}) AND status = 'active'
     `;
     const params: (string | number)[] = [sessionId, ...tiers];
 
@@ -674,20 +795,9 @@ JSON array of summary strings:`;
     if (options.before) { sql += ` AND timestamp <= ?`; params.push(options.before.getTime()); }
 
     const mapRow = (row: any, similarity?: number): MemoryEntry => {
-      const entry: MemoryEntry = {
-        id: row.id,
-        sessionId: row.session_id,
-        content: row.content,
-        role: row.role,
-        timestamp: new Date(row.timestamp),
-        tier: row.tier as MemoryTier,
-        importance: typeof row.importance === 'number' ? row.importance : 0.5,
-      };
-      if (row.consolidated_from) entry.consolidatedFrom = JSON.parse(row.consolidated_from);
-      if (row.metadata) entry.metadata = JSON.parse(row.metadata);
-      if (similarity !== undefined) entry.similarity = similarity;
-      return entry;
+      return this.rowToEntry(row, similarity);
     };
+
 
     // Semantic search
     if (query && query.trim() && this.semanticSearch) {
@@ -765,6 +875,11 @@ JSON array of summary strings:`;
           timestamp: u.timestamp,
           tier: u.tier,
           importance: u.importance,
+          certainty: u.certainty,
+          reinforcementCount: u.reinforcementCount,
+          lastVerified: u.lastVerified,
+          memoryType: u.memoryType,
+          status: u.status,
           metadata: { ...(u.metadata ?? {}), _userMemory: true, userId: u.userId },
         };
         if (u.consolidatedFrom) adapted.consolidatedFrom = u.consolidatedFrom;
@@ -810,18 +925,7 @@ JSON array of summary strings:`;
       Array.from(graphMemoryIds)
     );
 
-    const connected: MemoryEntry[] = connectedRows.map((row: any) => ({
-      id: row.id,
-      sessionId: row.session_id,
-      content: row.content,
-      role: row.role,
-      timestamp: new Date(row.timestamp),
-      tier: row.tier as MemoryTier,
-      importance: typeof row.importance === 'number' ? row.importance : 0.5,
-      consolidatedFrom: row.consolidated_from ? JSON.parse(row.consolidated_from) : undefined,
-      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
-      similarity: 0
-    }));
+    const connected: MemoryEntry[] = connectedRows.map((row: any) => this.rowToEntry(row, 0));
 
     return [...results, ...connected].slice(0, limit);
   }
@@ -865,21 +969,12 @@ JSON array of summary strings:`;
     if (memoryIds.length > 0) {
       const placeholders = memoryIds.map(() => '?').join(',');
       const rows = await this.db.all(
-        `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from, importance
+        `SELECT id, session_id, content, role, timestamp, metadata, tier, consolidated_from, importance,
+              certainty, reinforcement_count, last_verified, memory_type, status, contradicts
          FROM memories WHERE id IN (${placeholders})`,
         memoryIds
       );
-      relatedMemories = rows.map((row: any) => ({
-        id: row.id,
-        sessionId: row.session_id,
-        content: row.content,
-        role: row.role,
-        timestamp: new Date(row.timestamp),
-        tier: row.tier as MemoryTier,
-        importance: typeof row.importance === 'number' ? row.importance : 0.5,
-        consolidatedFrom: row.consolidated_from ? JSON.parse(row.consolidated_from) : undefined,
-        metadata: row.metadata ? JSON.parse(row.metadata) : undefined
-      }));
+      relatedMemories = rows.map((row: any) => this.rowToEntry(row));
     }
 
     return { entity: ent, relationships, relatedMemories };
@@ -897,16 +992,7 @@ JSON array of summary strings:`;
        ) ORDER BY timestamp ASC`,
       [sessionId, limit]
     );
-    return rows.map((row: any) => {
-      const entry: MemoryEntry = {
-        id: row.id, sessionId: row.session_id, content: row.content,
-        role: row.role, timestamp: new Date(row.timestamp), tier: row.tier as MemoryTier,
-        importance: typeof row.importance === 'number' ? row.importance : 0.5,
-      };
-      if (row.consolidated_from) entry.consolidatedFrom = JSON.parse(row.consolidated_from);
-      if (row.metadata) entry.metadata = JSON.parse(row.metadata);
-      return entry;
-    });
+    return rows.map((row: any) => this.rowToEntry(row));
   }
 
   async forget(
@@ -1031,22 +1117,276 @@ JSON array of summary strings:`;
     await this.db.run(`UPDATE user_memories SET importance = ? WHERE id = ?`, [clamped, id]);
   }
 
+
+  // ── v0.9: Belief Revision ─────────────────────────────────────────────────
+
+  /**
+   * v0.9: Reinforce a memory — increase certainty and increment reinforcement count.
+   * Use when a memory is confirmed by the user or repeated evidence.
+   */
+  async reinforce(id: string, boost = 0.15): Promise<ReinforcementResult> {
+    await this.init();
+    const now = Date.now();
+    await this.db.run(
+      `UPDATE memories
+         SET certainty = MIN(1.0, certainty + ?),
+             reinforcement_count = reinforcement_count + 1,
+             last_verified = ?
+       WHERE id = ?`,
+      [boost, now, id]
+    );
+    await this.db.run(
+      `UPDATE user_memories
+         SET certainty = MIN(1.0, certainty + ?),
+             reinforcement_count = reinforcement_count + 1,
+             last_verified = ?
+       WHERE id = ?`,
+      [boost, now, id]
+    );
+    const row = await this.db.get(
+      `SELECT id, certainty, reinforcement_count FROM memories WHERE id = ?
+       UNION SELECT id, certainty, reinforcement_count FROM user_memories WHERE id = ?`,
+      [id, id]
+    );
+    return {
+      id,
+      certainty: row?.certainty ?? 0.5,
+      reinforcementCount: row?.reinforcement_count ?? 0,
+    };
+  }
+
+  /**
+   * v0.9: Mark a memory as contradicted — lower certainty and update status.
+   * Optionally store the new contradicting content as a new memory.
+   * Returns the ID of the new memory if created.
+   */
+  async contradict(
+    sessionId: string,
+    contradictedId: string,
+    newContent: string,
+    role: 'user' | 'assistant' | 'system' = 'user'
+  ): Promise<{ contradictedId: string; newId?: string }> {
+    await this.init();
+    const now = Date.now();
+
+    // Lower certainty on the old memory, mark contradicted
+    await this.db.run(
+      `UPDATE memories
+         SET certainty = MAX(0.0, certainty - 0.25),
+             status = 'contradicted',
+             last_verified = ?
+       WHERE id = ?`,
+      [now, contradictedId]
+    );
+
+    if (!newContent.trim()) return { contradictedId };
+
+    // Store new memory linking back to what it contradicts
+    const entry = await this.remember(sessionId, newContent, role, {
+      contradicts: [contradictedId],
+    });
+    return { contradictedId, newId: entry.id };
+  }
+
+  /**
+   * v0.9: Detect contradictions between new content and existing memories.
+   * Heuristic mode (default): keyword overlap + opposite polarity signals.
+   * LLM mode (opt-in via contradictionDetection: true): asks the model.
+   */
+  async detectContradictions(
+    sessionId: string,
+    content: string,
+    options: { limit?: number } = {}
+  ): Promise<ContradictionResult> {
+    await this.init();
+    const limit = options.limit ?? 20;
+
+    // Pull recent active memories
+    const rows = await this.db.all(
+      `SELECT id, content, certainty FROM memories
+       WHERE session_id = ? AND tier IN ('working', 'long_term') AND status = 'active'
+       ORDER BY timestamp DESC LIMIT ?`,
+      [sessionId, limit]
+    );
+
+    if (rows.length === 0) return { detected: false, conflicting: [] };
+
+    if (this.contradictionDetection) {
+      return this.detectContradictionsLLM(content, rows);
+    }
+    return this.detectContradictionsHeuristic(content, rows);
+  }
+
+  private detectContradictionsHeuristic(
+    content: string,
+    rows: any[]
+  ): ContradictionResult {
+    const negators = ['not', "don't", "doesn't", "won't", 'never', 'no longer', 'stopped', 'switched', 'instead'];
+    const preferenceWords = ['prefer', 'like', 'use', 'love', 'want', 'need', 'hate', 'dislike'];
+
+    const contentLower = content.toLowerCase();
+    const contentHasNegation = negators.some(n => contentLower.includes(n));
+    const contentTokens = new Set(contentLower.split(/\W+/).filter(t => t.length > 3));
+
+    const conflicting: ContradictionResult['conflicting'] = [];
+
+    for (const row of rows) {
+      const rowLower = row.content.toLowerCase();
+      const rowTokens = new Set(rowLower.split(/\W+/).filter((t: string) => t.length > 3));
+      const rowHasNegation = negators.some(n => rowLower.includes(n));
+
+      // Overlap score
+      let overlap = 0;
+      for (const t of contentTokens) {
+        if (rowTokens.has(t)) overlap++;
+      }
+      const similarity = overlap / Math.max(contentTokens.size, rowTokens.size, 1);
+
+      // Check for shared preference words + negation polarity flip
+      const bothHavePreference = preferenceWords.some(p =>
+        contentLower.includes(p) && rowLower.includes(p)
+      );
+
+      const polarityFlip =
+        (contentHasNegation && !rowHasNegation) ||
+        (!contentHasNegation && rowHasNegation);
+
+      if (similarity > 0.3 && bothHavePreference && polarityFlip) {
+        conflicting.push({ id: row.id, content: row.content, certainty: row.certainty, similarity });
+      }
+    }
+
+    return { detected: conflicting.length > 0, conflicting };
+  }
+
+  private async detectContradictionsLLM(
+    content: string,
+    rows: any[]
+  ): Promise<ContradictionResult> {
+    const numbered = rows
+      .map((r, i) => `[${i + 1}] (id:${r.id}) ${r.content}`)
+      .join('\n');
+
+    const prompt =
+      `Does the new statement contradict any of the existing memories? ` +
+      `Reply with a JSON object: { "contradictions": [{ "index": N, "reason": "..." }] } or { "contradictions": [] }.\n\n` +
+      `New statement: "${content}"\n\nExisting memories:
+${numbered}
+
+JSON:`;
+
+    let llmResult: { response: string } | null = null;
+    try {
+      const resp = await fetch(`${this.embeddingUrl}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: this.contradictionModel, prompt, stream: false, options: { temperature: 0, num_predict: 200 } }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (resp.ok) llmResult = await resp.json() as { response: string };
+    } catch { /* timeout / network */ }
+
+    if (!llmResult) return this.detectContradictionsHeuristic(content, rows);
+
+    try {
+      const match = llmResult.response.match(/\{[\s\S]*\}/);
+      if (!match) return { detected: false, conflicting: [] };
+      const parsed = JSON.parse(match[0]) as { contradictions: Array<{ index: number }> };
+      const conflicting = parsed.contradictions
+        .map((c: { index: number }) => {
+          const row = rows[c.index - 1];
+          return row ? { id: row.id, content: row.content, certainty: row.certainty, similarity: 0.8 } : null;
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null);
+      return { detected: conflicting.length > 0, conflicting };
+    } catch {
+      return this.detectContradictionsHeuristic(content, rows);
+    }
+  }
+
+  /**
+   * v0.9: Invalidate a memory — mark it as superseded so it's excluded from recall.
+   */
+  async invalidate(id: string): Promise<void> {
+    await this.init();
+    await this.db.run(
+      `UPDATE memories SET status = 'superseded', last_verified = ? WHERE id = ?`,
+      [Date.now(), id]
+    );
+    await this.db.run(
+      `UPDATE user_memories SET status = 'superseded', last_verified = ? WHERE id = ?`,
+      [Date.now(), id]
+    );
+  }
+
+  /**
+   * v0.9: Get a chronological timeline of memory events for a session.
+   * Shows belief formation, reinforcement, contradiction, and consolidation.
+   */
+  async timeline(sessionId: string, options: { limit?: number } = {}): Promise<TimelineEvent[]> {
+    await this.init();
+    const limit = options.limit ?? 50;
+
+    const rows = await this.db.all(
+      `SELECT id, content, timestamp, certainty, importance, status, tier, consolidated_from,
+              reinforcement_count, last_verified
+       FROM memories
+       WHERE session_id = ?
+       ORDER BY timestamp ASC LIMIT ?`,
+      [sessionId, limit]
+    );
+
+    const events: TimelineEvent[] = [];
+
+    for (const row of rows) {
+      // Creation event
+      events.push({
+        timestamp: new Date(row.timestamp),
+        event: row.tier === 'long_term' ? 'consolidated' : 'created',
+        memoryId: row.id,
+        content: row.content,
+        certainty: row.certainty,
+        importance: row.importance,
+      });
+
+      // Status change events
+      if (row.status === 'contradicted') {
+        events.push({
+          timestamp: new Date(row.timestamp + 1),
+          event: 'contradicted',
+          memoryId: row.id,
+          content: row.content,
+          certainty: row.certainty,
+        });
+      } else if (row.status === 'superseded') {
+        events.push({
+          timestamp: new Date(row.timestamp + 1),
+          event: 'superseded',
+          memoryId: row.id,
+          content: row.content,
+          certainty: row.certainty,
+        });
+      }
+
+      // Reinforcement indicator (certainty > 0.65)
+      if (row.reinforcement_count > 0) {
+        events.push({
+          timestamp: new Date((row.last_verified ?? row.timestamp) as number),
+          event: 'reinforced',
+          memoryId: row.id,
+          content: row.content,
+          certainty: row.certainty,
+        });
+      }
+    }
+
+    return events.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  }
+
   // ── v0.5: User-scoped memory (cross-session) ──────────────────────────────
 
   private mapUserRow(row: any, similarity?: number): UserMemoryEntry {
-    const entry: UserMemoryEntry = {
-      id: row.id,
-      userId: row.user_id,
-      content: row.content,
-      role: row.role,
-      timestamp: new Date(row.timestamp),
-      tier: row.tier as MemoryTier,
-      importance: typeof row.importance === 'number' ? row.importance : 0.5,
-    };
-    if (row.consolidated_from) entry.consolidatedFrom = JSON.parse(row.consolidated_from);
-    if (row.metadata) entry.metadata = JSON.parse(row.metadata);
-    if (similarity !== undefined) entry.similarity = similarity;
-    return entry;
+    return this.rowToUserEntry(row, similarity);
   }
 
   /**
@@ -1087,17 +1427,22 @@ JSON array of summary strings:`;
 
     const importance = await this.scoreImportance(truncated);
 
+    const now = Date.now();
     await this.db.run(
       `INSERT INTO user_memories
-       (id, user_id, content, role, timestamp, metadata, content_hash, embedding, tier, importance)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?)`,
-      [id, userId, truncated, role, Date.now(),
-       metadata ? JSON.stringify(metadata) : null, contentHash, embeddingJson, importance]
+       (id, user_id, content, role, timestamp, metadata, content_hash, embedding, tier, importance,
+        certainty, reinforcement_count, last_verified, memory_type, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, 0.5, 0, ?, ?, 'active')`,
+      [id, userId, truncated, role, now,
+       metadata ? JSON.stringify(metadata) : null, contentHash, embeddingJson, importance,
+       now, this.defaultMemoryType]
     );
 
     const entry: UserMemoryEntry = {
       id, userId, content: truncated, role,
-      timestamp: new Date(), tier: 'working', importance,
+      timestamp: new Date(now), tier: 'working', importance,
+      certainty: 0.5, reinforcementCount: 0, lastVerified: new Date(now),
+      memoryType: this.defaultMemoryType, status: 'active',
       ...(metadata !== undefined && { metadata })
     };
     return entry;
@@ -1116,6 +1461,7 @@ JSON array of summary strings:`;
     await this.init();
 
     const tiers = options.tiers ?? ['working', 'long_term'];
+    const statusFilter = `AND status = 'active'`;
     const tierPlaceholders = tiers.map(() => '?').join(',');
 
     let sql = `SELECT * FROM user_memories WHERE user_id = ? AND tier IN (${tierPlaceholders})`;
@@ -1215,13 +1561,8 @@ JSON array of summary strings:`;
     if (candidates.length === 0) return { summarized: 0, created: 0, archived: 0 };
 
     const entries: MemoryEntry[] = candidates.map((row: any) => ({
-      id: row.id,
+      ...this.rowToEntry(row),
       sessionId: row.user_id,
-      content: row.content,
-      role: row.role,
-      timestamp: new Date(row.timestamp),
-      tier: row.tier as MemoryTier,
-      importance: typeof row.importance === 'number' ? row.importance : 0.5,
     }));
 
     const summaries = await this.summarizeMemories(entries, model);
