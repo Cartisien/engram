@@ -2,6 +2,8 @@
 
 > **Persistent semantic memory for AI agents — local-first, zero cloud required.**
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18988892.svg)](https://doi.org/10.5281/zenodo.18988892)
+
 ![Engram demo](assets/demo.gif)
 
 ```typescript
