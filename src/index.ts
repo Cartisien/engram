@@ -104,6 +104,14 @@ export interface TimelineEvent {
   relatedId?: string;
 }
 
+// v0.9: reflect() result
+export interface ReflectResult {
+  query: string;
+  insights: string[];           // LLM-generated synthesis
+  memoriesUsed: MemoryEntry[];  // memories that informed the insights
+  certaintyWeighted: boolean;   // whether high-certainty memories were prioritized
+}
+
 export interface ConsolidateOptions {
   batch?: number;         // how many working memories to consolidate (default: 50)
   keep?: number;          // keep N most recent working memories untouched (default: 20)
@@ -413,6 +421,49 @@ JSON array:`;
    * v0.8: Heuristic importance scorer — instant, no LLM needed.
    * Signals: preferences/decisions/goals → high; small talk → low.
    */
+
+  /** v1.0: BM25-style keyword scoring (simplified: TF * IDF approximation via SQLite FTS) */
+  private bm25Score(query: string, content: string): number {
+    const queryTerms = query.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+    if (queryTerms.length === 0) return 0;
+    const contentLower = content.toLowerCase();
+    const words = contentLower.split(/\s+/);
+    const totalWords = words.length || 1;
+    let score = 0;
+    for (const term of queryTerms) {
+      const tf = words.filter(w => w.includes(term)).length / totalWords;
+      // simplified IDF: longer matches get a small boost
+      const idf = Math.log(1 + 10 / (1 + tf * 10));
+      score += tf * idf;
+    }
+    return Math.min(1.0, score * 5);
+  }
+
+  /**
+   * v1.0: Reciprocal Rank Fusion — merge multiple ranked lists.
+   * k=60 is the standard constant from the RRF paper.
+   */
+  private rrfMerge(
+    lists: Array<Array<{ id: string; entry: MemoryEntry }>>,
+    k = 60
+  ): MemoryEntry[] {
+    const scores = new Map<string, { entry: MemoryEntry; score: number }>();
+    for (const list of lists) {
+      list.forEach(({ id, entry }, rank) => {
+        const rrf = 1 / (k + rank + 1);
+        const existing = scores.get(id);
+        if (existing) {
+          existing.score += rrf;
+        } else {
+          scores.set(id, { entry, score: rrf });
+        }
+      });
+    }
+    return [...scores.values()]
+      .sort((a, b) => b.score - a.score)
+      .map(v => v.entry);
+  }
+
   /** v0.9: Map a DB row to a full MemoryEntry */
   private rowToEntry(row: any, similarity?: number): MemoryEntry {
     return {
@@ -799,47 +850,61 @@ JSON array of summary strings:`;
     };
 
 
-    // Semantic search
-    if (query && query.trim() && this.semanticSearch) {
-      const queryVector = await this.embed(query);
-      if (queryVector) {
-        const rows = await this.db.all(sql + ` ORDER BY timestamp DESC`, params);
-        const scored = rows
-          .map((row: any) => {
-            let similarity = 0;
-            if (row.embedding) {
-              try {
-                similarity = this.cosineSimilarity(queryVector, JSON.parse(row.embedding));
-              } catch { /* skip */ }
-            }
-            const importance = typeof row.importance === 'number' ? row.importance : 0.5;
-            // v0.8: blend similarity + importance for ranking
-            const rankScore = similarity * 0.7 + importance * 0.3;
-            return { row, similarity, rankScore };
-          })
-          .sort((a, b) => b.rankScore - a.rankScore)
-          .slice(0, limit);
-
-        const results = scored.map(({ row, similarity }) => mapRow(row, similarity));
-
-
-        if (this.graphMemory && options.includeGraph !== false) {
-          const graphAugmented = await this.augmentWithGraph(sessionId, results, limit);
-          return this.blendUserMemories(graphAugmented, options.userId, query, limit);
-        }
-        return this.blendUserMemories(results, options.userId, query, limit);
-      }
-    }
-
-    // Keyword fallback
+    // v1.0: Multi-strategy retrieval with RRF merge
     if (query && query.trim()) {
-      const keywords = query.toLowerCase().split(/\s+/).filter(k => k.length > 2);
-      if (keywords.length > 0) {
-        sql += ` AND (` + keywords.map(() => `LOWER(content) LIKE ?`).join(' OR ') + `)`;
-        params.push(...keywords.map(k => `%${k}%`));
+      const allRows = await this.db.all(sql + ` ORDER BY timestamp DESC LIMIT ?`, [...params, limit * 3]);
+
+      // Strategy 1: Semantic (if available)
+      let semanticList: Array<{ id: string; entry: MemoryEntry }> = [];
+      if (this.semanticSearch) {
+        const queryVector = await this.embed(query);
+        if (queryVector) {
+          semanticList = allRows
+            .map((row: any) => {
+              let similarity = 0;
+              if (row.embedding) {
+                try { similarity = this.cosineSimilarity(queryVector, JSON.parse(row.embedding)); } catch { /* skip */ }
+              }
+              // blend: similarity * 0.6 + importance * 0.2 + certainty * 0.2
+              const rankScore = similarity * 0.6 + (row.importance ?? 0.5) * 0.2 + (row.certainty ?? 0.5) * 0.2;
+              return { id: row.id as string, entry: mapRow(row, similarity), rankScore };
+            })
+            .sort((a, b) => b.rankScore - a.rankScore)
+            .slice(0, limit);
+        }
       }
+
+      // Strategy 2: BM25 keyword scoring
+      const keywordList: Array<{ id: string; entry: MemoryEntry }> = allRows
+        .map((row: any) => ({
+          id: row.id as string,
+          entry: mapRow(row),
+          bm25: this.bm25Score(query, row.content),
+        }))
+        .filter(r => r.bm25 > 0)
+        .sort((a, b) => b.bm25 - a.bm25)
+        .slice(0, limit);
+
+      // Strategy 3: Recency (temporal) — always included
+      const recencyList: Array<{ id: string; entry: MemoryEntry }> = allRows
+        .slice(0, limit)
+        .map((row: any) => ({ id: row.id as string, entry: mapRow(row) }));
+
+      // RRF merge — use all available lists
+      const lists = [recencyList];
+      if (semanticList.length > 0) lists.unshift(semanticList);
+      if (keywordList.length > 0) lists.splice(1, 0, keywordList);
+
+      const merged = this.rrfMerge(lists).slice(0, limit);
+
+      if (this.graphMemory && options.includeGraph !== false) {
+        const graphAugmented = await this.augmentWithGraph(sessionId, merged, limit);
+        return this.blendUserMemories(graphAugmented, options.userId, query, limit);
+      }
+      return this.blendUserMemories(merged, options.userId, query, limit);
     }
 
+    // No query — return by recency
     sql += ` ORDER BY timestamp DESC LIMIT ?`;
     params.push(limit);
 
@@ -1381,6 +1446,106 @@ JSON:`;
     }
 
     return events.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  }
+
+
+  /**
+   * v0.9: Reflect — synthesize insights across memories for a given query.
+   * 
+   * Unlike recall() which retrieves raw memories, reflect() uses an LLM to
+   * reason across them and generate new understanding. Use before starting
+   * a task, when making decisions, or when you need a synthesis rather than
+   * a lookup.
+   *
+   * @example
+   * const result = await memory.reflect('session_jeff', 'What does this user care most about?');
+   * // → { insights: ['User strongly prefers TypeScript...', 'Has a deadline sensitivity...'], ... }
+   */
+  async reflect(
+    sessionId: string,
+    query: string,
+    options: {
+      limit?: number;
+      model?: string;
+      userId?: string;           // also blend in user-scoped memories
+      includeArchived?: boolean;
+    } = {}
+  ): Promise<ReflectResult> {
+    await this.init();
+
+    const limit = options.limit ?? 20;
+    const model = options.model || this.consolidateModel;
+
+    // Pull relevant memories — prioritize high-certainty ones
+    const tiers: MemoryTier[] = options.includeArchived
+      ? ['working', 'long_term', 'archived']
+      : ['working', 'long_term'];
+
+    const recallOpts: RecallOptions = { tiers, ...(options.userId !== undefined && { userId: options.userId }) };
+    let memories = await this.recall(sessionId, query, limit, recallOpts);
+
+    // Sort: blend similarity + certainty so high-confidence memories surface first
+    memories = memories.sort((a, b) => {
+      const scoreA = (a.similarity ?? 0.5) * 0.6 + a.certainty * 0.4;
+      const scoreB = (b.similarity ?? 0.5) * 0.6 + b.certainty * 0.4;
+      return scoreB - scoreA;
+    });
+
+    if (memories.length === 0) {
+      return { query, insights: [], memoriesUsed: [], certaintyWeighted: true };
+    }
+
+    const numbered = memories
+      .map((m, i) => `[${i + 1}] (certainty:${m.certainty.toFixed(2)}, importance:${m.importance.toFixed(2)}) ${m.content}`)
+      .join('\n');
+
+    const prompt =
+      `You are a memory reflection system for an AI agent. ` +
+      `Given the following memories and the query below, generate 3-5 concise insights ` +
+      `that synthesize what is known, highlight patterns, note any contradictions, ` +
+      `and surface what matters most for answering the query. ` +
+      `Weight higher-certainty memories more heavily. ` +
+      `Return ONLY a JSON array of insight strings.\n\n` +
+      `Query: "${query}"\n\n` +
+      `Memories (certainty and importance shown):\n${numbered}\n\n` +
+      `JSON array of insight strings:`;
+
+    let insights: string[] = [];
+
+    try {
+      const response = await fetch(`${this.embeddingUrl}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          prompt,
+          stream: false,
+          options: { temperature: 0.3, num_predict: 600 },
+        }),
+        signal: AbortSignal.timeout(20000),
+      });
+
+      if (response.ok) {
+        const data = await response.json() as { response: string };
+        const raw = data.response.trim();
+        const match = raw.match(/\[[\s\S]*\]/);
+        if (match) {
+          const parsed = JSON.parse(match[0]) as unknown[];
+          insights = parsed
+            .filter((s): s is string => typeof s === 'string' && s.trim().length > 0);
+        }
+      }
+    } catch {
+      // LLM unavailable — return memories without synthesis
+      insights = memories.slice(0, 5).map(m => m.content);
+    }
+
+    return {
+      query,
+      insights,
+      memoriesUsed: memories,
+      certaintyWeighted: true,
+    };
   }
 
   // ── v0.5: User-scoped memory (cross-session) ──────────────────────────────
