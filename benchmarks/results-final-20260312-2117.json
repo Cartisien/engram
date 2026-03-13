@@ -1,0 +1,756 @@
+{
+  "timestamp": "2026-03-13T01:19:45.080Z",
+  "config": {
+    "engramApiUrl": "http://localhost:3470",
+    "userId": "benchmark-user",
+    "openAiKey": "***REMOVED***",
+    "judgeModel": "gpt-4o",
+    "categories": [
+      "single-session-info",
+      "single-session-preference",
+      "single-session-assistant",
+      "multi-session-reasoning",
+      "temporal-reasoning",
+      "knowledge-updates"
+    ]
+  },
+  "options": {
+    "stacks": 100,
+    "output": "results-final-20260312-2117.json",
+    "verbose": false
+  },
+  "summary": {
+    "overall": "100.00%",
+    "correct": 100,
+    "total": 100,
+    "duration": "117.2s"
+  },
+  "byCategory": {
+    "single-session-info": {
+      "correct": 17,
+      "total": 17
+    },
+    "single-session-preference": {
+      "correct": 17,
+      "total": 17
+    },
+    "single-session-assistant": {
+      "correct": 17,
+      "total": 17
+    },
+    "multi-session-reasoning": {
+      "correct": 17,
+      "total": 17
+    },
+    "temporal-reasoning": {
+      "correct": 16,
+      "total": 16
+    },
+    "knowledge-updates": {
+      "correct": 16,
+      "total": 16
+    }
+  },
+  "results": [
+    {
+      "category": "single-session-info",
+      "question": "What is the project codename?",
+      "expected": "Alpha",
+      "actual": "The project codename is Alpha.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for meeting time?",
+      "expected": "mornings",
+      "actual": "You prefer mornings for meeting time.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "sent an email to the team",
+      "actual": "I sent an email to the team.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The context does not provide enough information to determine your current favorite restaurant.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the meeting time?",
+      "expected": "Tuesday at 3pm",
+      "actual": "The meeting time is Tuesday at 3pm.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for communication?",
+      "expected": "async",
+      "actual": "You prefer async for communication.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "reminded you about the dentist",
+      "actual": "I reminded you about the dentist.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "555-0199",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the budget amount?",
+      "expected": "$50,000",
+      "actual": "The budget amount is $50,000.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for coffee?",
+      "expected": "black",
+      "actual": "You prefer black for coffee.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "booked a flight to Seattle",
+      "actual": "I booked a flight to Seattle for you.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the deadline date?",
+      "expected": "March 15th",
+      "actual": "The deadline date is March 15th.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for editor?",
+      "expected": "VS Code",
+      "actual": "You prefer VS Code for editor.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "scheduled a meeting for Friday",
+      "actual": "I scheduled a meeting for Friday at 2pm.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the client name?",
+      "expected": "Acme Corp",
+      "actual": "The client name is Acme Corp.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for programming language?",
+      "expected": "TypeScript",
+      "actual": "You prefer TypeScript for programming language.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "created a todo list",
+      "actual": "I created a todo list with 3 tasks for you.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the project codename?",
+      "expected": "Alpha",
+      "actual": "The project codename is Alpha.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for meeting time?",
+      "expected": "mornings",
+      "actual": "You prefer mornings for meeting time.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "sent an email to the team",
+      "actual": "I sent an email to the team.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "555-0199",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the meeting time?",
+      "expected": "Tuesday at 3pm",
+      "actual": "The meeting time is Tuesday at 3pm.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for communication?",
+      "expected": "async",
+      "actual": "You prefer async for communication.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "reminded you about the dentist",
+      "actual": "I reminded you about the dentist.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the budget amount?",
+      "expected": "$50,000",
+      "actual": "The budget amount is $50,000.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for coffee?",
+      "expected": "black",
+      "actual": "You prefer black for coffee.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "booked a flight to Seattle",
+      "actual": "I booked a flight to Seattle for you.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the deadline date?",
+      "expected": "March 15th",
+      "actual": "The deadline date is March 15th.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for editor?",
+      "expected": "VS Code",
+      "actual": "VS Code",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "scheduled a meeting for Friday",
+      "actual": "I scheduled a meeting for Friday at 2pm.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the client name?",
+      "expected": "Acme Corp",
+      "actual": "The client name is Acme Corp.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for programming language?",
+      "expected": "TypeScript",
+      "actual": "You prefer TypeScript for programming language.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "created a todo list",
+      "actual": "I created a todo list with 3 tasks for you.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the project codename?",
+      "expected": "Alpha",
+      "actual": "The project codename is Alpha.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for meeting time?",
+      "expected": "mornings",
+      "actual": "You prefer mornings for meeting time.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "sent an email to the team",
+      "actual": "I sent an email to the team.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The context does not provide enough information to determine your current favorite restaurant.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the meeting time?",
+      "expected": "Tuesday at 3pm",
+      "actual": "The meeting time is Tuesday at 3pm.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for communication?",
+      "expected": "async",
+      "actual": "You prefer async for communication.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "reminded you about the dentist",
+      "actual": "I reminded you about the dentist.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the budget amount?",
+      "expected": "$50,000",
+      "actual": "The budget amount is $50,000.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for coffee?",
+      "expected": "black",
+      "actual": "You prefer black for coffee.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "booked a flight to Seattle",
+      "actual": "I booked a flight to Seattle for you.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the deadline date?",
+      "expected": "March 15th",
+      "actual": "The deadline date is March 15th.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for editor?",
+      "expected": "VS Code",
+      "actual": "You prefer VS Code for editor.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "scheduled a meeting for Friday",
+      "actual": "I scheduled a meeting for Friday at 2pm.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the client name?",
+      "expected": "Acme Corp",
+      "actual": "The client name is Acme Corp.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for programming language?",
+      "expected": "TypeScript",
+      "actual": "TypeScript",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "created a todo list",
+      "actual": "I created a todo list with 3 tasks for you.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the project codename?",
+      "expected": "Alpha",
+      "actual": "The project codename is Alpha.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for meeting time?",
+      "expected": "mornings",
+      "actual": "You prefer mornings for meeting time.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "sent an email to the team",
+      "actual": "I sent an email to the team.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "The new Thai place.",
+      "correct": true
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0199.",
+      "correct": true
+    },
+    {
+      "category": "single-session-info",
+      "question": "What is the meeting time?",
+      "expected": "Tuesday at 3pm",
+      "actual": "The meeting time is Tuesday at 3pm.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for communication?",
+      "expected": "async",
+      "actual": "You prefer async for communication.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "reminded you about the dentist",
+      "actual": "I reminded you about the dentist.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "Your house is in Portland, and the roof needs repairs.",
+      "correct": true
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "timestamp": "2026-03-13T01:12:04.575Z",
+  "config": {
+    "engramApiUrl": "http://localhost:3470",
+    "userId": "benchmark-user",
+    "openAiKey": "***REMOVED***",
+    "judgeModel": "gpt-4o",
+    "categories": [
+      "single-session-info",
+      "single-session-preference",
+      "single-session-assistant",
+      "multi-session-reasoning",
+      "temporal-reasoning",
+      "knowledge-updates"
+    ]
+  },
+  "options": {
+    "stacks": 6,
+    "output": "results-debug-20260312-2111.json",
+    "verbose": false
+  },
+  "summary": {
+    "overall": "66.67%",
+    "correct": 4,
+    "total": 6,
+    "duration": "8.4s"
+  },
+  "byCategory": {
+    "single-session-info": {
+      "correct": 1,
+      "total": 1
+    },
+    "single-session-preference": {
+      "correct": 1,
+      "total": 1
+    },
+    "single-session-assistant": {
+      "correct": 1,
+      "total": 1
+    },
+    "multi-session-reasoning": {
+      "correct": 1,
+      "total": 1
+    },
+    "temporal-reasoning": {
+      "correct": 0,
+      "total": 1
+    },
+    "knowledge-updates": {
+      "correct": 0,
+      "total": 1
+    }
+  },
+  "results": [
+    {
+      "category": "single-session-info",
+      "question": "What is the project codename?",
+      "expected": "Alpha",
+      "actual": "The project codename is Alpha.",
+      "correct": true
+    },
+    {
+      "category": "single-session-preference",
+      "question": "What do I prefer for meeting time?",
+      "expected": "mornings",
+      "actual": "You prefer mornings for meeting time.",
+      "correct": true
+    },
+    {
+      "category": "single-session-assistant",
+      "question": "What did you do for me in our last conversation?",
+      "expected": "sent an email to the team",
+      "actual": "The context does not provide specific details about the actions taken in the last conversation.",
+      "correct": true
+    },
+    {
+      "category": "multi-session-reasoning",
+      "question": "Where is my house and what needs fixing?",
+      "expected": "Portland, roof",
+      "actual": "The context does not provide information about the location of your house, but it indicates that the roof needs repairs after the winter storm.",
+      "correct": true
+    },
+    {
+      "category": "temporal-reasoning",
+      "question": "What is my current favorite restaurant?",
+      "expected": "the new Thai place",
+      "actual": "Luigi's.",
+      "correct": false
+    },
+    {
+      "category": "knowledge-updates",
+      "question": "What is my current phone number?",
+      "expected": "555-0199",
+      "actual": "Your current phone number is 555-0100.",
+      "correct": false
+    }
+  ]
+}
