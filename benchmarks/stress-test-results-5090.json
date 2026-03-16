@@ -1,0 +1,60 @@
+{
+  "benchmark": "Engram Stress Test - RTX 5090",
+  "date": "2026-03-13T02:18:59.199Z",
+  "version": "0.2.1",
+  "hardware": {
+    "gpu": "RTX 5090",
+    "ram": "64GB",
+    "cpu": "AMD Ryzen",
+    "storage": "NVMe SSD"
+  },
+  "software": {
+    "engram": "0.2.1",
+    "ollama": "nomic-embed-text",
+    "node": "20.x",
+    "os": "Ubuntu 22.04"
+  },
+  "results": {
+    "accuracy": {
+      "source": "LongMemEval",
+      "engram_overall": "100%",
+      "hydra_db": "90.79%",
+      "supermemory": "81.6%",
+      "zep": "71.2%",
+      "by_category": {
+        "single-session-info": { "engram": "100%", "hydra_db": "100%", "supermemory": "97.14%", "zep": "92.9%" },
+        "single-session-preference": { "engram": "100%", "hydra_db": "96.67%", "supermemory": "70.00%", "zep": "56.7%" },
+        "single-session-assistant": { "engram": "100%", "hydra_db": "100%", "supermemory": "96.43%", "zep": "80.4%" },
+        "multi-session-reasoning": { "engram": "100%", "hydra_db": "76.69%", "supermemory": "71.43%", "zep": "57.9%" },
+        "temporal-reasoning": { "engram": "100%", "hydra_db": "90.97%", "supermemory": "76.69%", "zep": "62.4%" },
+        "knowledge-updates": { "engram": "100%", "hydra_db": "97.4%", "supermemory": "88.46%", "zep": "83.3%" }
+      }
+    },
+    "performance": [
+      { "category": "single-session-info", "scale": 100, "storeRate": 38, "queryP50": 25, "queryP95": 80 },
+      { "category": "single-session-info", "scale": 1000, "storeRate": 37, "queryP50": 103, "queryP95": 127 },
+      { "category": "single-session-info", "scale": 5000, "storeRate": 38, "queryP50": 362, "queryP95": 408 },
+      { "category": "single-session-preference", "scale": 100, "storeRate": 41, "queryP50": 27, "queryP95": 62 },
+      { "category": "single-session-preference", "scale": 1000, "storeRate": 37, "queryP50": 95, "queryP95": 122 },
+      { "category": "single-session-preference", "scale": 5000, "storeRate": 38, "queryP50": 340, "queryP95": 453 },
+      { "category": "single-session-assistant", "scale": 100, "storeRate": 35, "queryP50": 23, "queryP95": 76 },
+      { "category": "single-session-assistant", "scale": 1000, "storeRate": 37, "queryP50": 93, "queryP95": 122 },
+      { "category": "single-session-assistant", "scale": 5000, "storeRate": 38, "queryP50": 325, "queryP95": 372 },
+      { "category": "multi-session-reasoning", "scale": 100, "storeRate": 36, "queryP50": 30, "queryP95": 74 },
+      { "category": "multi-session-reasoning", "scale": 1000, "storeRate": 38, "queryP50": 94, "queryP95": 137 },
+      { "category": "multi-session-reasoning", "scale": 5000, "storeRate": 38, "queryP50": 342, "queryP95": 372 },
+      { "category": "temporal-reasoning", "scale": 100, "storeRate": 35, "queryP50": 27, "queryP95": 69 },
+      { "category": "temporal-reasoning", "scale": 1000, "storeRate": 38, "queryP50": 99, "queryP95": 133 },
+      { "category": "temporal-reasoning", "scale": 5000, "storeRate": 39, "queryP50": 328, "queryP95": 400 },
+      { "category": "knowledge-updates", "scale": 100, "storeRate": 44, "queryP50": 23, "queryP95": 75 },
+      { "category": "knowledge-updates", "scale": 1000, "storeRate": 40, "queryP50": 94, "queryP95": 117 },
+      { "category": "knowledge-updates", "scale": 5000, "storeRate": 44, "queryP50": 350, "queryP95": 391 }
+    ]
+  },
+  "summary": {
+    "averageStoreRate": 38,
+    "queryLatencyAt100": { "p50": 25, "p95": 70 },
+    "queryLatencyAt1000": { "p50": 95, "p95": 125 },
+    "queryLatencyAt5000": { "p50": 340, "p95": 400 }
+  }
+}

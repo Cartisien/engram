@@ -195,9 +195,9 @@ export class Engram {
   private defaultMemoryType: 'episodic' | 'semantic';
 
   constructor(config: EngramConfig = {}) {
-    this.dbPath = config.dbPath || ':memory:';
+    this.dbPath = config.dbPath || './engram.db';
     this.maxContextLength = config.maxContextLength || 4000;
-    this.embeddingUrl = config.embeddingUrl || 'http://192.168.68.73:11434';
+    this.embeddingUrl = config.embeddingUrl || process.env.OLLAMA_URL || 'http://localhost:11434';
     this.embeddingModel = config.embeddingModel || 'nomic-embed-text';
     this.semanticSearch = config.semanticSearch !== false;
     this.graphMemory = config.graphMemory === true;
@@ -340,6 +340,8 @@ export class Engram {
     this.initialized = true;
   }
 
+  private ollamaWarned = false;
+
   private async embed(text: string): Promise<number[] | null> {
     try {
       const response = await fetch(`${this.embeddingUrl}/api/embeddings`, {
@@ -352,6 +354,13 @@ export class Engram {
       const data = await response.json() as { embedding: number[] };
       return data.embedding ?? null;
     } catch {
+      if (!this.ollamaWarned) {
+        this.ollamaWarned = true;
+        console.warn(
+          `[engram] Ollama not found at ${this.embeddingUrl} — falling back to keyword search.\n` +
+          `         For semantic search: install Ollama (https://ollama.ai) and run: ollama pull nomic-embed-text`
+        );
+      }
       return null;
     }
   }

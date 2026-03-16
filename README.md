@@ -1,236 +1,16 @@
 # Engram
 
-> **Persistent semantic memory for AI agents — local-first, zero cloud required.**
+> Persistent semantic memory for AI agents — local-first, zero cloud, zero config.
 
+[![npm](https://img.shields.io/npm/v/@cartisien/engram)](https://www.npmjs.com/package/@cartisien/engram)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18988892.svg)](https://doi.org/10.5281/zenodo.18988892)
-
-![Engram demo](assets/demo.gif)
-
-```typescript
-import { Engram } from '@cartisien/engram';
-
-const memory = new Engram({ dbPath: './memory.db' });
-
-// Store
-await memory.remember('user_123', 'User prefers TypeScript and dark mode', 'user');
-
-// Recall semantically — finds the right memory even without exact keyword match
-const context = await memory.recall('user_123', 'what are the user\'s preferences?', 5);
-// [{ content: 'User prefers TypeScript and dark mode', similarity: 0.82, ... }]
-```
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
 
-## The Problem
+## Quickstart — 30 seconds
 
-AI assistants are amnesiacs. Every conversation starts fresh. Context windows fill up. Important details get lost.
-
-Most memory systems fix retrieval but ignore the harder problem: **memories go stale, contradict each other, and vary in confidence.** Your agent ends up recalling outdated facts with the same certainty as confirmed ones.
-
-And most send your memory content to OpenAI or another cloud LLM to process it — which means your agent's private context leaves your machine.
-
-## The Solution
-
-Engram gives your agents **persistent, evolving memory** — SQLite-backed, local-first, TypeScript and Python SDKs.
-
-Memories aren't just stored. They're beliefs that evolve.
-
-- **Local-first:** Memory never leaves your machine. All LLM processing uses local Ollama by default — no cloud, no API keys, no data leaving your infrastructure
-- **Belief revision:** Every memory has a `certainty` score. `reinforce()` to confirm, `contradict()` to challenge, `invalidate()` to supersede. Outdated beliefs don't haunt your agent.
-- **reflect():** Synthesize insights across memories before a task — not just retrieval, actual reasoning
-- **Multi-strategy recall:** Semantic + BM25 keyword + temporal recency, merged via Reciprocal Rank Fusion
-- **Importance scoring:** Heuristic scoring at write time. High-importance memories are protected from consolidation.
-- **Graph memory:** Entity-relationship extraction — recall connected context automatically
-- **Consolidation:** LLM summarizes old working memories into long-term entries. High-certainty memories are never compressed.
-- **MCP-native:** Drop into Claude Desktop or Cursor via [`@cartisien/engram-mcp`](https://github.com/Cartisien/engram-mcp)
-- **Typed:** Full TypeScript + Python SDK at feature parity
-
-> **Privacy note:** Engram defaults to local Ollama for all LLM operations (graph extraction, consolidation, importance scoring, reflection). Cloud is opt-in via `EngramClient`. Your agent's memory stays on your infrastructure.
-
-## Installation
-
-```bash
-npm install @cartisien/engram
-```
-
-### Optional: Local Embeddings (Recommended)
-
-For semantic search, install [Ollama](https://ollama.ai) and pull the embedding model:
-
-```bash
-ollama pull nomic-embed-text
-```
-
-Without Ollama, Engram falls back to keyword search automatically.
-
-## Quick Start
-
-```typescript
-import { Engram } from '@cartisien/engram';
-
-const memory = new Engram({
-  dbPath: './bot-memory.db',
-  embeddingUrl: 'http://localhost:11434', // Ollama default
-});
-
-// In your agent/chat handler
-async function handleMessage(sessionId: string, message: string) {
-  // 1. Recall relevant context semantically
-  const context = await memory.recall(sessionId, message, 5);
-
-  // 2. Build prompt with memory
-  const prompt = buildPrompt(context, message);
-
-  // 3. Get AI response
-  const response = await llm.chat(prompt);
-
-  // 4. Store both sides
-  await memory.remember(sessionId, message, 'user');
-  await memory.remember(sessionId, response, 'assistant');
-
-  return response;
-}
-```
-
-## API
-
-### `new Engram(config?)`
-
-```typescript
-const memory = new Engram({
-  dbPath: './memory.db',           // SQLite file path (default: ':memory:')
-  maxContextLength: 4000,          // Max chars per entry (default: 4000)
-  embeddingUrl: 'http://localhost:11434',  // Ollama base URL
-  embeddingModel: 'nomic-embed-text',     // Embedding model
-  semanticSearch: true,            // Enable semantic search (default: true)
-});
-```
-
-### `remember(sessionId, content, role?, metadata?)`
-
-Store a memory. Embedding is generated automatically.
-
-```typescript
-await memory.remember('session_abc', 'User loves Thai food', 'user');
-```
-
-### `recall(sessionId, query?, limit?, options?)`
-
-Retrieve relevant memories. Uses semantic search when available, keyword fallback otherwise. Returns entries sorted by similarity score.
-
-```typescript
-const results = await memory.recall('session_abc', 'food preferences', 5);
-// [{ content: '...', similarity: 0.84, ... }]
-```
-
-### `history(sessionId, limit?)`
-
-Chronological conversation history.
-
-```typescript
-const chat = await memory.history('session_abc', 20);
-```
-
-### `forget(sessionId, options?)`
-
-Delete memories.
-
-```typescript
-await memory.forget('session_abc');                          // all
-await memory.forget('session_abc', { id: 'entry_id' });     // one
-await memory.forget('session_abc', { before: new Date() }); // old entries
-```
-
-### `graph(sessionId, entity)`
-
-Returns a one-hop relationship map for a named entity — all connected entities and the memories that link them.
-
-Requires `graphMemory: true` in config and a running Ollama instance with `qwen2.5:32b` (or override via `graphModel`).
-
-```typescript
-const memory = new Engram({
-  dbPath: './memory.db',
-  graphMemory: true,
-  graphModel: 'qwen2.5:32b', // default
-});
-
-const graph = await memory.graph('session_abc', 'GovScout');
-// {
-//   entity: 'GovScout',
-//   edges: [
-//     { relation: 'uses', target: 'MUI', sourceMemoryId: '...' },
-//     { relation: 'built_by', target: 'Jeff', sourceMemoryId: '...' },
-//   ],
-//   memories: [ { content: '...', ... } ]
-// }
-```
-
-### `recall()` with graph augmentation
-
-```typescript
-const results = await memory.recall('session_abc', 'what is GovScout?', 5, {
-  includeGraph: true, // augment top results with graph-connected memories
-});
-```
-
-### `consolidate(sessionId, options?)` *(v0.4)*
-
-Summarizes old working memories into dense long-term entries via a local LLM. Originals are archived (hidden from recall but not deleted).
-
-```typescript
-const memory = new Engram({
-  dbPath: './memory.db',
-  autoConsolidate: true,       // auto-trigger on remember() (default: false)
-  consolidateThreshold: 100,   // trigger when working memories exceed this (default: 100)
-  consolidateKeep: 20,         // keep N most recent working memories untouched (default: 20)
-  consolidateBatch: 50,        // memories to process per run (default: 50)
-  consolidateModel: 'qwen2.5:32b', // LLM for summarization
-});
-
-// Manual consolidation
-const result = await memory.consolidate('session_abc');
-// → { summarized: 50, created: 4, archived: 50 }
-
-// Preview without writing
-const preview = await memory.consolidate('session_abc', { dryRun: true });
-// → { summarized: 50, created: 0, archived: 0, previews: ['User prefers TypeScript...', ...] }
-```
-
-**Memory tiers:**
-- `working` — recent, granular memories (default)
-- `long_term` — LLM-generated summaries of consolidated batches
-- `archived` — original memories after consolidation (excluded from recall)
-
-`recall()` searches `working` and `long_term` by default. Pass `tiers` to override:
-
-```typescript
-// Search all tiers including archived
-const results = await memory.recall('session_abc', 'preferences', 10, {
-  tiers: ['working', 'long_term', 'archived'],
-});
-```
-
-### `stats(sessionId)`
-
-```typescript
-const stats = await memory.stats('session_abc');
-// {
-//   total: 42,
-//   byRole: { user: 21, assistant: 21 },
-//   byTier: { working: 30, long_term: 12, archived: 50 },
-//   withEmbeddings: 42,
-//   graphNodes: 18,
-//   graphEdges: 31
-// }
-```
-
-## MCP Server
-
-Use Engram directly in Claude Desktop, Cursor, or any MCP client:
-
-```bash
-npx -y @cartisien/engram-mcp
-```
+### Claude Desktop / Cursor (MCP)
 
 ```json
 {
@@ -243,38 +23,331 @@ npx -y @cartisien/engram-mcp
 }
 ```
 
-→ [`@cartisien/engram-mcp`](https://github.com/Cartisien/engram-mcp) on GitHub
+That's it. Engram gives Claude persistent memory across conversations — stored locally in a SQLite file, no API key required.
 
-## Philosophy
+→ Full MCP docs: [`@cartisien/engram-mcp`](https://github.com/Cartisien/engram-mcp)
 
-> *"The trace precedes presence."*
+---
 
-Memory isn't storage. It's the substrate of self.
+### TypeScript / Node.js SDK
 
-Engram doesn't just persist data — it gives your agents **continuity**. The ability to learn, reference, and grow across conversations.
+```bash
+npm install @cartisien/engram
+```
 
-## Roadmap
+```typescript
+import { Engram } from '@cartisien/engram';
 
-- **v0.1** ✅ SQLite persistence, keyword search
-- **v0.2** ✅ Semantic search via local Ollama embeddings
-- **v0.3** ✅ Graph memory — entity relationships, connected context
-- **v0.4** ✅ Memory consolidation, long-term summarization
+const memory = new Engram(); // zero config — saves to ./engram.db
+
+await memory.remember('user_123', 'Prefers TypeScript and dark mode');
+const context = await memory.recall('user_123', 'what does this user prefer?');
+// → [{ content: 'Prefers TypeScript and dark mode', similarity: 0.91 }]
+```
+
+No Ollama? It falls back to keyword search automatically and tells you:
+```
+[engram] Ollama not found — falling back to keyword search.
+         For semantic search: install Ollama and run: ollama pull nomic-embed-text
+```
+
+---
+
+### Python SDK
+
+```bash
+pip install cartisien-engram
+```
+
+```python
+from cartisien_engram import Engram
+
+memory = Engram()  # saves to ./engram.db
+
+memory.remember("user_123", "Prefers dark mode and async Python")
+context = memory.recall("user_123", "user preferences")
+```
+
+---
+
+## Drop into your agent
+
+Paste this into any LLM chat handler:
+
+```typescript
+import { Engram } from '@cartisien/engram';
+
+const memory = new Engram();
+
+async function chat(sessionId: string, userMessage: string, llm: any) {
+  // 1. Pull relevant context before calling LLM
+  const context = await memory.recall(sessionId, userMessage, 5);
+  const contextStr = context.map(m => m.content).join('\n');
+
+  // 2. Call your LLM with memory in the system prompt
+  const response = await llm.chat({
+    system: `Relevant context from memory:\n${contextStr}`,
+    user: userMessage,
+  });
+
+  // 3. Store both sides
+  await memory.remember(sessionId, userMessage, 'user');
+  await memory.remember(sessionId, response, 'assistant');
+
+  return response;
+}
+```
+
+**Vercel AI SDK:**
+```typescript
+import { Engram } from '@cartisien/engram';
+import { streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+const memory = new Engram();
+
+export async function POST(req: Request) {
+  const { messages, sessionId } = await req.json();
+  const lastMessage = messages.at(-1)?.content ?? '';
+
+  const context = await memory.recall(sessionId, lastMessage, 5);
+  const contextStr = context.map(m => m.content).join('\n');
+
+  // Store user message
+  await memory.remember(sessionId, lastMessage, 'user');
+
+  const result = streamText({
+    model: openai('gpt-4o'),
+    system: context.length ? `Memory:\n${contextStr}` : undefined,
+    messages,
+    onFinish: async ({ text }) => {
+      await memory.remember(sessionId, text, 'assistant');
+    },
+  });
+
+  return result.toDataStreamResponse();
+}
+```
+
+---
+
+## Why Engram
+
+AI assistants forget everything between conversations. Most memory solutions either:
+- Require cloud accounts and send your data to their servers
+- Store raw chunks that go stale and contradict each other
+
+Engram stores memories as **evolving beliefs** — locally, in SQLite, with no cloud dependency.
+
+| | Engram | Mem0 | Zep |
+|---|---|---|---|
+| Local-first | ✅ | ⚠️ self-host option | ⚠️ self-host option |
+| Zero API key | ✅ | ❌ | ❌ |
+| Zero config | ✅ | ❌ | ❌ |
+| TypeScript-first | ✅ | ❌ Python-first | ❌ Python-first |
+| MCP native | ✅ | ❌ | ❌ |
+| Belief revision | ✅ | ⚠️ | ❌ |
+| Open source | ✅ MIT | ✅ | ✅ |
+
+---
+
+## Semantic search setup (optional)
+
+Engram uses Ollama for local embeddings. Without it, keyword search works automatically.
+
+```bash
+# Install Ollama: https://ollama.ai
+ollama pull nomic-embed-text
+```
+
+That's the only setup step. Engram detects it automatically.
+
+---
+
+## API
+
+### Core
+
+```typescript
+const memory = new Engram(config?)
+```
+
+Config defaults (all optional):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `dbPath` | `./engram.db` | SQLite file path |
+| `embeddingUrl` | `$OLLAMA_URL` or `http://localhost:11434` | Ollama base URL |
+| `embeddingModel` | `nomic-embed-text` | Embedding model |
+| `semanticSearch` | `true` | Enable semantic search |
+| `graphMemory` | `false` | Entity relationship extraction |
+| `autoConsolidate` | `false` | Auto-summarize old memories |
+
+### `remember(sessionId, content, role?, metadata?)`
+Store a memory. Embedding generated automatically.
+
+```typescript
+await memory.remember('session_1', 'User is vegetarian', 'user');
+```
+
+### `recall(sessionId, query?, limit?, options?)`
+Retrieve relevant memories. Semantic + keyword + recency, merged via RRF.
+
+```typescript
+const results = await memory.recall('session_1', 'dietary preferences', 5);
+// [{ content: 'User is vegetarian', similarity: 0.91, certainty: 0.5, ... }]
+```
+
+### `history(sessionId, limit?)`
+Chronological conversation history.
+
+```typescript
+const chat = await memory.history('session_1', 20);
+```
+
+### `forget(sessionId, options?)`
+Delete memories.
+
+```typescript
+await memory.forget('session_1');                           // all
+await memory.forget('session_1', { id: 'entry_id' });      // one
+await memory.forget('session_1', { before: new Date() });  // old
+```
+
+### `stats(sessionId)`
+Memory counts by tier, role, embeddings.
+
+```typescript
+const s = await memory.stats('session_1');
+// { total: 42, byTier: { working: 30, long_term: 12 }, withEmbeddings: 42 }
+```
+
+---
+
+## Belief revision
+
+Every memory has a `certainty` score (0–1). Stale or contradicted memories fade naturally.
+
+```typescript
+// Confirm a memory
+await memory.reinforce(entryId);               // certainty += 0.15
+
+// Flag a contradiction — old memory marked contradicted, new one stored
+await memory.contradict('session_1', oldId, 'User switched to dark mode');
+
+// Remove a memory from recall
+await memory.invalidate(entryId);
+
+// Detect contradictions before storing
+const result = await memory.detectContradictions('session_1', newContent);
+if (result.detected) { /* handle */ }
+```
+
+---
+
+## Consolidation
+
+Summarize old working memories into dense long-term entries via local LLM.
+
+```typescript
+const memory = new Engram({
+  autoConsolidate: true,
+  consolidateThreshold: 100,  // trigger when working memories exceed this
+  consolidateModel: 'qwen2.5:32b',
+});
+
+// Or manually
+const result = await memory.consolidate('session_1');
+// → { summarized: 50, created: 4, archived: 50 }
+
+// Preview without writing
+const preview = await memory.consolidate('session_1', { dryRun: true });
+```
+
+---
+
+## Graph memory
+
+Entity-relationship extraction for connected context.
+
+```typescript
+const memory = new Engram({ graphMemory: true });
+
+// After remembering "Jeff is building GovScout with MUI and React"
+const graph = await memory.graph('session_1', 'GovScout');
+// {
+//   entity: 'govscout',
+//   relationships: [
+//     { type: 'outgoing', relation: 'uses', target: 'mui' },
+//     { type: 'outgoing', relation: 'built_by', target: 'jeff' },
+//   ]
+// }
+
+// Auto-augment recall with graph-connected memories
+const results = await memory.recall('session_1', 'what is GovScout?', 5, {
+  includeGraph: true,
+});
+```
+
+---
+
+## reflect()
+
+Synthesize insights across memories — actual reasoning, not just retrieval.
+
+```typescript
+const result = await memory.reflect('session_1', 'What does this user care most about?');
+// → {
+//   insights: [
+//     'User strongly prefers TypeScript over JavaScript',
+//     'Has a recurring deadline sensitivity around Fridays',
+//   ],
+//   memoriesUsed: [...],
+// }
+```
+
+---
+
+## User-scoped memory
+
+Persist facts about a user across all sessions.
+
+```typescript
+await memory.rememberUser('user_jeff', 'Prefers TypeScript');
+await memory.rememberUser('user_jeff', 'Timezone: America/New_York');
+
+// Blend into any session recall
+const results = await memory.recall('any_session', 'preferences', 10, {
+  userId: 'user_jeff',
+});
+```
+
+---
+
+## Remote client
+
+Connect to a self-hosted Engram server.
+
+```typescript
+import { EngramClient } from '@cartisien/engram';
+
+const memory = new EngramClient({ baseUrl: 'http://your-server:3470' });
+// Same API as Engram
+```
+
+---
 
 ## The Cartisien Memory Suite
 
 | Package | Purpose |
 |---------|---------|
-| [`@cartisien/engram`](https://github.com/Cartisien/engram) | Persistent memory SDK — **this package** |
+| [`@cartisien/engram`](https://github.com/Cartisien/engram) | Memory SDK — **this package** |
 | [`@cartisien/engram-mcp`](https://github.com/Cartisien/engram-mcp) | MCP server for Claude Desktop / Cursor |
-| `@cartisien/extensa` | Vector infrastructure *(coming soon)* |
-| `@cartisien/cogito` | Agent identity & lifecycle *(coming soon)* |
+| `@cartisien/extensa` | Vector infrastructure |
+| `@cartisien/cogito` | Agent identity & lifecycle |
 
-*Res cogitans meets res extensa.*
+---
 
 ## License
 
 MIT © [Cartisien Interactive](https://cartisien.com)
-
----
-
-**Built for people who think forgetting is a bug.**
