@@ -1,1 +1,0 @@
-{"version":3,"file":"synthetic-corpus.d.ts","sourceRoot":"","sources":["synthetic-corpus.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,OAAO,KAAK,EAAE,gBAAgB,EAAE,MAAM,+BAA+B,CAAA;AAsHrE,eAAO,MAAM,gBAAgB,EAAE,gBAAgB,EAAE,EAWhD,CAAA;AAED,MAAM,WAAW,cAAc;IAC7B,WAAW,EAAE,MAAM,CAAA;IACnB,QAAQ,EAAE,MAAM,CAAA;IAChB,cAAc,EAAE,MAAM,CAAA;CACvB;AAED,eAAO,MAAM,gBAAgB,EAAE,cAAc,EAwC5C,CAAA"}

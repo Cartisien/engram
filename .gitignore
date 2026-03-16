@@ -3,3 +3,5 @@ dist/
 *.db
 *.log
 .npmrc
+benchmarks/results-*.json
+benchmarks/stress-test-results-5090.json
