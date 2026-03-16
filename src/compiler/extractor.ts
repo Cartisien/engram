@@ -38,7 +38,18 @@ export const EXTRACTION_SYSTEM_PROMPT = `You are a memory claim extractor. Given
    - source_directness: 1.0 for directly stated facts, lower for implied/inferred
    - support_count: start at 1, increment if the same fact appears multiple times
 
-8. **Return valid JSON only**, matching the ExtractionResult schema:
+8. **CRITICAL — Preserve specific names, places, and list items verbatim. Never paraphrase or abstract.**
+
+   BAD → GOOD examples:
+   - ❌ object_text: "home country"          ✅ object_text: "Sweden"
+   - ❌ object_text: "nature and animals"    ✅ Two claims: object_text: "dinosaurs" AND object_text: "nature"
+   - ❌ canonical: "Caroline values helping others"  ✅ canonical: "Caroline researched adoption agencies in Sweden"
+   - ❌ object_text: "a European city"       ✅ object_text: "Berlin"
+   - ❌ canonical: "User has outdoor interests"  ✅ canonical: "User enjoys hiking and rock climbing"
+
+   Rule: if the conversation contains a specific word, use that exact word. Do NOT replace it with a category or description.
+
+9. **Return valid JSON only**, matching the ExtractionResult schema:
    {
      "entities": [{ "id": string, "name": string, "type": EntityType, "aliases": string[] }],
      "claims": [{ "id": string, "canonical_text": string, "subject_entity_id": string, "subject_text": string, "predicate": string, "object_text": string, "object_entity_id": string|undefined, "memory_type": MemoryType, "explicitness": Explicitness, "polarity": Polarity, "status": ClaimStatus, "confidence": number, "temporal": TemporalInfo|undefined, "source_turn_index": number, "linked_claim_ids": string[], "extraction_confidence": number, "entity_resolution_confidence": number, "temporal_resolution_confidence": number, "support_count": number, "source_directness": number }],
@@ -59,9 +70,16 @@ Return ONLY the JSON object. No markdown fencing, no commentary.`
 // Extractor
 // ---------------------------------------------------------------------------
 
-// Default to OpenRouter — set EXTRACT_MODEL / EXTRACT_BASE_URL to override
-const DEFAULT_MODEL = process.env['EXTRACT_MODEL'] ?? 'google/gemini-2.0-flash-001'
-const DEFAULT_BASE_URL = process.env['EXTRACT_BASE_URL'] ?? 'https://openrouter.ai/api/v1'
+// Model resolution order:
+//   COMPILER_MODEL > EXTRACT_MODEL > default (google/gemini-2.0-flash-001)
+// Base URL resolution order:
+//   COMPILER_BASE_URL > EXTRACT_BASE_URL > default (OpenRouter)
+//
+// Common overrides:
+//   COMPILER_MODEL=gpt-4o                                   (OpenAI direct)
+//   COMPILER_MODEL=ollama/qwen2.5:32b COMPILER_BASE_URL=http://192.168.68.73:11434/v1
+const DEFAULT_MODEL = process.env['COMPILER_MODEL'] ?? process.env['EXTRACT_MODEL'] ?? 'google/gemini-2.0-flash-001'
+const DEFAULT_BASE_URL = process.env['COMPILER_BASE_URL'] ?? process.env['EXTRACT_BASE_URL'] ?? 'https://openrouter.ai/api/v1'
 
 export async function extractClaims(
   turns: ConversationTurn[],
