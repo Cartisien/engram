@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenClaw Artifact Packet",
+  "type": "object",
+  "required": [
+    "task_id",
+    "goal",
+    "acceptance_criteria",
+    "executor",
+    "files_changed",
+    "commands_run",
+    "results",
+    "proposed_next_action"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "goal": {
+      "type": "string"
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "executor": {
+      "type": "string"
+    },
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "commands_run": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "results": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "failure_summary": {
+      "type": "string"
+    },
+    "diff_summary": {
+      "type": "string"
+    },
+    "screenshot_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "log_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "proposed_next_action": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

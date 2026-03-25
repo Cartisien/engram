@@ -1849,3 +1849,9 @@ export { buildWakeBriefing, handleSleep } from './integrations/cogito.js';
 // v0.7: Remote HTTP client
 export { EngramClient } from './client.js';
 export type { EngramClientConfig } from './client.js';
+
+// v0.7.0: Experimental search enhancements (WIP - needs API alignment)
+// export * from './search/reranker.js';
+// export * from './search/propositions.js';
+// export * from './search/hybrid.js';
+// export * from './search/fts5.js';

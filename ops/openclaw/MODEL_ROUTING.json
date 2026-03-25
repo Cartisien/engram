@@ -1,0 +1,30 @@
+{
+  "project": "engram-memory-sdk",
+  "planner_model": "anthropic/claude-opus-4-6",
+  "reviewer_model": "anthropic/claude-opus-4-6",
+  "local_executor_primary": "local:devstral-small-2-24b",
+  "local_executor_secondary": "local:qwen3-coder-30b-a3b",
+  "local_reviewer_optional": "local:qwen3-coder-next",
+  "default_to_local": true,
+  "cloud_usage_policy": {
+    "allowed_for": [
+      "initial_planning",
+      "replanning_after_repeated_failure",
+      "milestone_review",
+      "architecture_critique"
+    ],
+    "disallowed_for": [
+      "routine_repo_search",
+      "routine_code_edits",
+      "routine_test_fix_loops",
+      "basic_build_debugging"
+    ]
+  },
+  "retry_policy": {
+    "local_retries_per_task": 2,
+    "then": "replan_or_change_executor"
+  },
+  "artifact_schema_path": "/ops/openclaw/ARTIFACT_PACKET.schema.json",
+  "memory_template_path": "/ops/openclaw/MEMORY_UPDATE_TEMPLATE.json",
+  "check_runner_path": "/ops/openclaw/run_checks.sh"
+}
