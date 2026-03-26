@@ -5,3 +5,5 @@ dist/
 .npmrc
 benchmarks/results-*.json
 benchmarks/stress-test-results-5090.json
+*.env
+*-cache.json
