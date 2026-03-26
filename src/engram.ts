@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type {
-  EngramConfig,
+  AdapterEngramConfig as EngramConfig,
   IMemoryAdapter,
   Memory,
   MemoryInput,

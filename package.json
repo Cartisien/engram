@@ -1,6 +1,6 @@
 {
   "name": "@cartisien/engram",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Persistent memory for AI assistants. SQLite-backed conversational memory with semantic search.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -22,6 +22,7 @@
   "author": "Cartisien Interactive",
   "license": "MIT",
   "dependencies": {
+    "lru-cache": "^11.2.7",
     "sqlite": "^5.1.1",
     "sqlite3": "^6.0.1"
   },

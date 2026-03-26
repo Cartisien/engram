@@ -1850,8 +1850,16 @@ export { buildWakeBriefing, handleSleep } from './integrations/cogito.js';
 export { EngramClient } from './client.js';
 export type { EngramClientConfig } from './client.js';
 
-// v0.7.0: Experimental search enhancements (WIP - needs API alignment)
-// export * from './search/reranker.js';
-// export * from './search/propositions.js';
-// export * from './search/hybrid.js';
-// export * from './search/fts5.js';
+// v1.1: Search enhancements
+export { rerank, rerankerAvailable } from './search/reranker.js';
+export type { RerankerResult } from './search/reranker.js';
+export { extractPropositions } from './search/propositions.js';
+export type { Proposition } from './search/propositions.js';
+export * from './search/hybrid.js';
+export { FTS5Search } from './search/fts5.js';
+
+// v1.1: Cache, batch, dedup, graph modules
+export { EmbeddingCache } from './cache/embedding-cache.js';
+export * from './utils/batch.js';
+export * from './utils/dedup.js';
+export * from './graph/traversal.js';
