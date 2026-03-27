@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import { open, Database as SQLiteDatabase } from 'sqlite';
+import { extractPropositions } from './search/propositions';
 
 export type MemoryTier = 'working' | 'long_term' | 'archived';
 
@@ -810,6 +811,40 @@ JSON array of summary strings:`;
       for (const edge of edges) {
         await this.storeEdge(sessionId, edge, id);
       }
+    }
+
+    // v1.1: Extract propositions and store as shadow entries
+    try {
+      const propositions = extractPropositions(truncated);
+      for (const propText of propositions) {
+        const propId = createHash('sha256')
+          .update(`${id}:prop:${propText}`)
+          .digest('hex').slice(0, 16);
+        const propHash = createHash('sha256').update(propText).digest('hex').slice(0, 16);
+
+        let propEmbeddingJson: string | null = null;
+        if (this.semanticSearch) {
+          const propVector = await this.embed(propText);
+          if (propVector) propEmbeddingJson = JSON.stringify(propVector);
+        }
+
+        const propMeta = JSON.stringify({
+          ...(metadata || {}),
+          parentId: id,
+          type: 'proposition',
+        });
+
+        await this.db.run(
+          `INSERT OR IGNORE INTO memories
+           (id, session_id, content, role, timestamp, metadata, content_hash, embedding, tier, importance,
+            certainty, reinforcement_count, last_verified, memory_type, status, contradicts)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, ?, 0, ?, 'semantic', 'active', NULL)`,
+          [propId, sessionId, propText, role, now, propMeta, propHash, propEmbeddingJson,
+           importance, certainty, now]
+        );
+      }
+    } catch (e) {
+      // Proposition extraction is best-effort — never block remember()
     }
 
     // v0.4: Auto-consolidate if threshold exceeded
